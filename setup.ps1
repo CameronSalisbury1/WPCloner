@@ -9,23 +9,13 @@
     2. Patches wp-config.php for the local Docker environment
     3. Starts Docker containers (MariaDB, WordPress, phpMyAdmin)
     4. Waits for the database import to complete
-
-.PARAMETER Force
-    If specified, removes existing working copies and recreates them from backup.
-
-.PARAMETER SkipDocker
-    If specified, only copies and patches files without starting Docker.
+    5. Replaces production URLs with localhost
+    6. Disables Gravity Forms notifications (optional)
+    7. Redirects webhooks (optional)
 
 .EXAMPLE
     .\setup.ps1
-    .\setup.ps1 -Force
-    .\setup.ps1 -SkipDocker
 #>
-
-param(
-    [switch]$Force,
-    [switch]$SkipDocker
-)
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -56,6 +46,7 @@ $DbPassword = $EnvVars["DB_PASSWORD"]
 $WpPort = $EnvVars["WORDPRESS_PORT"]
 $PmaPort = $EnvVars["PHPMYADMIN_PORT"]
 $DisableGfNotifications = $EnvVars["DISABLE_GF_NOTIFICATIONS"] -eq "true"
+$GfWebhookRedirectHost = $EnvVars["GF_WEBHOOK_REDIRECT_HOST"]
 
 Write-Host ""
 Write-Host "=== WordPress Local Setup ===" -ForegroundColor Cyan
@@ -64,7 +55,7 @@ Write-Host ""
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/7] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/8] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check Docker
 try {
@@ -100,23 +91,15 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 # Step 2: Copy backup files
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/7] Copying backup files..." -ForegroundColor Yellow
+Write-Host "[2/8] Copying backup files..." -ForegroundColor Yellow
 
 $WorkingWpDir = Join-Path $ScriptDir "wordpress"
 $WorkingDbDir = Join-Path $ScriptDir "database"
 
 # Handle WordPress directory
 if (Test-Path $WorkingWpDir) {
-    if ($Force) {
-        Write-Host "  Removing existing wordpress/ directory (-Force)..." -ForegroundColor DarkYellow
-        Remove-Item -Path $WorkingWpDir -Recurse -Force
-    }
-    else {
-        Write-Host "  wordpress/ already exists, skipping copy. Use -Force to overwrite." -ForegroundColor DarkYellow
-    }
-}
-
-if (-not (Test-Path $WorkingWpDir)) {
+    Write-Host "  wordpress/ already exists, skipping copy." -ForegroundColor DarkYellow
+} else {
     Write-Host "  Copying Backup/wordpress/ -> wordpress/ ..." -ForegroundColor White
     Write-Host "  (This may take a while for large uploads)" -ForegroundColor DarkGray
 
@@ -138,16 +121,8 @@ if (-not (Test-Path $WorkingWpDir)) {
 
 # Handle database directory
 if (Test-Path $WorkingDbDir) {
-    if ($Force) {
-        Write-Host "  Removing existing database/ directory (-Force)..." -ForegroundColor DarkYellow
-        Remove-Item -Path $WorkingDbDir -Recurse -Force
-    }
-    else {
-        Write-Host "  database/ already exists, skipping copy. Use -Force to overwrite." -ForegroundColor DarkYellow
-    }
-}
-
-if (-not (Test-Path $WorkingDbDir)) {
+    Write-Host "  database/ already exists, skipping copy." -ForegroundColor DarkYellow
+} else {
     Write-Host "  Copying Backup/database/ -> database/ ..." -ForegroundColor White
 
     New-Item -ItemType Directory -Path $WorkingDbDir -Force | Out-Null
@@ -178,7 +153,7 @@ if (-not (Test-Path $WorkingDbDir)) {
 # Step 3: Patch wp-config.php for local Docker
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/7] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+Write-Host "[3/8] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
 $WpConfigPath = Join-Path $WorkingWpDir "wp-config.php"
 
@@ -276,79 +251,73 @@ foreach ($file in $filesToRemove) {
 # ─────────────────────────────────────────────
 # Step 4: Start Docker containers
 # ─────────────────────────────────────────────
-if ($SkipDocker) {
-    Write-Host ""
-    Write-Host "[4/7] Skipping Docker start (-SkipDocker)" -ForegroundColor DarkYellow
-    Write-Host "[5/7] Skipping health check (-SkipDocker)" -ForegroundColor DarkYellow
-    Write-Host "[6/7] Skipping URL replacement (-SkipDocker)" -ForegroundColor DarkYellow
-    Write-Host "[7/7] Skipping Gravity Forms config (-SkipDocker)" -ForegroundColor DarkYellow
+Write-Host ""
+Write-Host "[4/8] Starting Docker containers..." -ForegroundColor Yellow
+
+Push-Location $ScriptDir
+try {
+    docker compose up -d 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "docker compose up failed"
+        exit 1
+    }
+    Write-Host "  Containers started." -ForegroundColor Green
 }
-else {
-    Write-Host ""
-    Write-Host "[4/7] Starting Docker containers..." -ForegroundColor Yellow
+finally {
+    Pop-Location
+}
 
-    Push-Location $ScriptDir
+# ─────────────────────────────────────────────
+# Step 5: Wait for database to be ready
+# ─────────────────────────────────────────────
+Write-Host ""
+Write-Host "[5/8] Waiting for database import to complete..." -ForegroundColor Yellow
+Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
+Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
+Write-Host ""
+
+$maxAttempts = 120  # 120 * 10s = 20 minutes max wait
+$attempt = 0
+$ready = $false
+
+while (-not $ready -and $attempt -lt $maxAttempts) {
+    $attempt++
     try {
-        docker compose up -d 2>&1 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "docker compose up failed"
-            exit 1
+        $result = docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" -e "SELECT 1;" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $ready = $true
         }
-        Write-Host "  Containers started." -ForegroundColor Green
-    }
-    finally {
-        Pop-Location
-    }
-
-    # ─────────────────────────────────────────────
-    # Step 5: Wait for database to be ready
-    # ─────────────────────────────────────────────
-    Write-Host ""
-    Write-Host "[5/7] Waiting for database import to complete..." -ForegroundColor Yellow
-    Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
-    Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
-    Write-Host ""
-
-    $maxAttempts = 120  # 120 * 10s = 20 minutes max wait
-    $attempt = 0
-    $ready = $false
-
-    while (-not $ready -and $attempt -lt $maxAttempts) {
-        $attempt++
-        try {
-            $result = docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" -e "SELECT 1;" 2>&1
-            if ($LASTEXITCODE -eq 0) {
-                $ready = $true
-            }
-            else {
-                Write-Host "  Attempt $attempt/$maxAttempts - DB not ready yet, waiting 10s..." -ForegroundColor DarkGray
-                Start-Sleep -Seconds 10
-            }
-        }
-        catch {
+        else {
             Write-Host "  Attempt $attempt/$maxAttempts - DB not ready yet, waiting 10s..." -ForegroundColor DarkGray
             Start-Sleep -Seconds 10
         }
     }
+    catch {
+        Write-Host "  Attempt $attempt/$maxAttempts - DB not ready yet, waiting 10s..." -ForegroundColor DarkGray
+        Start-Sleep -Seconds 10
+    }
+}
 
-    if (-not $ready) {
-        Write-Host ""
-        Write-Host "  WARNING: Database did not become ready within 20 minutes." -ForegroundColor Red
-        Write-Host "  The import may still be running. Check with:" -ForegroundColor Red
-        Write-Host "    docker compose logs -f db" -ForegroundColor White
-        Write-Host ""
-    } else {
-        # ─────────────────────────────────────────────
-        # Step 6: Install WP-CLI and replace URLs
-        # ─────────────────────────────────────────────
-        Write-Host ""
-        Write-Host "[6/7] Replacing production URLs with localhost..." -ForegroundColor Yellow
-        
-        $productionUrl = "https://waikatotainui.com"
-        $localUrl = "http://localhost:$WpPort"
-        
-        # Install WP-CLI if not present, then run search-replace
-        $wpCliScript = @"
+if (-not $ready) {
+    Write-Host ""
+    Write-Host "  WARNING: Database did not become ready within 20 minutes." -ForegroundColor Red
+    Write-Host "  The import may still be running. Check with:" -ForegroundColor Red
+    Write-Host "    docker compose logs -f db" -ForegroundColor White
+    Write-Host ""
+    exit 1
+}
+
+# ─────────────────────────────────────────────
+# Step 6: Install WP-CLI and replace URLs
+# ─────────────────────────────────────────────
+Write-Host ""
+Write-Host "[6/8] Replacing production URLs with localhost..." -ForegroundColor Yellow
+
+$productionUrl = "https://waikatotainui.com"
+$localUrl = "http://localhost:$WpPort"
+
+# Install WP-CLI if not present, then run search-replace
+$wpCliScript = @"
 if ! command -v wp &> /dev/null; then
     curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
     chmod +x wp-cli.phar
@@ -356,39 +325,59 @@ if ! command -v wp &> /dev/null; then
 fi
 wp --allow-root search-replace '$productionUrl' '$localUrl' --all-tables --report-changed-only
 "@
-        
-        docker compose exec -T wordpress bash -c $wpCliScript 2>&1 | ForEach-Object { 
-            Write-Host "  $_" -ForegroundColor DarkGray 
-        }
-        
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "  URL replacement complete: $productionUrl -> $localUrl" -ForegroundColor Green
-        } else {
-            Write-Host "  WARNING: URL replacement may have failed. Check output above." -ForegroundColor Yellow
-        }
-        
-        # ─────────────────────────────────────────────
-        # Step 7: Disable Gravity Forms notifications
-        # ─────────────────────────────────────────────
-        Write-Host ""
-        if ($DisableGfNotifications) {
-            Write-Host "[7/7] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
-            
-            $gfSql = 'UPDATE wp_gf_form_meta SET notifications = REPLACE(notifications, ''"isActive":true'', ''"isActive":false'') WHERE notifications LIKE ''%isActive%'';'
-            
-            docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" "$DbName" -e $gfSql 2>&1 | ForEach-Object {
-                Write-Host "  $_" -ForegroundColor DarkGray
-            }
-            
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "  Gravity Forms notifications disabled." -ForegroundColor Green
-            } else {
-                Write-Host "  WARNING: Failed to disable Gravity Forms notifications." -ForegroundColor Yellow
-            }
-        } else {
-            Write-Host "[7/7] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
-        }
+
+docker compose exec -T wordpress bash -c $wpCliScript 2>&1 | ForEach-Object { 
+    Write-Host "  $_" -ForegroundColor DarkGray 
+}
+
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  URL replacement complete: $productionUrl -> $localUrl" -ForegroundColor Green
+} else {
+    Write-Host "  WARNING: URL replacement may have failed. Check output above." -ForegroundColor Yellow
+}
+
+# ─────────────────────────────────────────────
+# Step 7: Disable Gravity Forms notifications
+# ─────────────────────────────────────────────
+Write-Host ""
+if ($DisableGfNotifications) {
+    Write-Host "[7/8] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+    
+    $gfSql = 'UPDATE wp_gf_form_meta SET notifications = REPLACE(notifications, ''"isActive":true'', ''"isActive":false'') WHERE notifications LIKE ''%isActive%'';'
+    
+    docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" "$DbName" -e $gfSql 2>&1 | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkGray
     }
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Gravity Forms notifications disabled." -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: Failed to disable Gravity Forms notifications." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[7/8] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
+}
+
+# ─────────────────────────────────────────────
+# Step 8: Redirect Make.com webhooks
+# ─────────────────────────────────────────────
+Write-Host ""
+if ($GfWebhookRedirectHost) {
+    Write-Host "[8/8] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+    
+    $webhookSql = "UPDATE wp_gf_addon_feed SET meta = REPLACE(meta, ''hook.us1.make.com'', ''$GfWebhookRedirectHost'') WHERE meta LIKE ''%hook.us1.make.com%'';"
+    
+    docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" "$DbName" -e $webhookSql 2>&1 | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkGray
+    }
+    
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Webhooks redirected: hook.us1.make.com -> $GfWebhookRedirectHost" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: Failed to redirect webhooks." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "[8/8] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
@@ -409,5 +398,4 @@ Write-Host "    docker compose logs -f db          # Watch DB import progress" -
 Write-Host "    docker compose logs -f wordpress   # Watch WordPress logs" -ForegroundColor DarkGray
 Write-Host "    docker compose down                # Stop containers" -ForegroundColor DarkGray
 Write-Host "    docker compose down -v             # Stop and remove DB volume (full reset)" -ForegroundColor DarkGray
-Write-Host "    .\setup.ps1 -Force                 # Re-copy from backup and re-patch" -ForegroundColor DarkGray
 Write-Host ""
