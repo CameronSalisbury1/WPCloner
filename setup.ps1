@@ -55,6 +55,7 @@ $DbUser = $EnvVars["DB_USER"]
 $DbPassword = $EnvVars["DB_PASSWORD"]
 $WpPort = $EnvVars["WORDPRESS_PORT"]
 $PmaPort = $EnvVars["PHPMYADMIN_PORT"]
+$DisableGfNotifications = $EnvVars["DISABLE_GF_NOTIFICATIONS"] -eq "true"
 
 Write-Host ""
 Write-Host "=== WordPress Local Setup ===" -ForegroundColor Cyan
@@ -63,7 +64,7 @@ Write-Host ""
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/6] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/7] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check Docker
 try {
@@ -99,7 +100,7 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 # Step 2: Copy backup files
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/6] Copying backup files..." -ForegroundColor Yellow
+Write-Host "[2/7] Copying backup files..." -ForegroundColor Yellow
 
 $WorkingWpDir = Join-Path $ScriptDir "wordpress"
 $WorkingDbDir = Join-Path $ScriptDir "database"
@@ -177,7 +178,7 @@ if (-not (Test-Path $WorkingDbDir)) {
 # Step 3: Patch wp-config.php for local Docker
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/6] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+Write-Host "[3/7] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
 $WpConfigPath = Join-Path $WorkingWpDir "wp-config.php"
 
@@ -277,13 +278,14 @@ foreach ($file in $filesToRemove) {
 # ─────────────────────────────────────────────
 if ($SkipDocker) {
     Write-Host ""
-    Write-Host "[4/6] Skipping Docker start (-SkipDocker)" -ForegroundColor DarkYellow
-    Write-Host "[5/6] Skipping health check (-SkipDocker)" -ForegroundColor DarkYellow
-    Write-Host "[6/6] Skipping URL replacement (-SkipDocker)" -ForegroundColor DarkYellow
+    Write-Host "[4/7] Skipping Docker start (-SkipDocker)" -ForegroundColor DarkYellow
+    Write-Host "[5/7] Skipping health check (-SkipDocker)" -ForegroundColor DarkYellow
+    Write-Host "[6/7] Skipping URL replacement (-SkipDocker)" -ForegroundColor DarkYellow
+    Write-Host "[7/7] Skipping Gravity Forms config (-SkipDocker)" -ForegroundColor DarkYellow
 }
 else {
     Write-Host ""
-    Write-Host "[4/6] Starting Docker containers..." -ForegroundColor Yellow
+    Write-Host "[4/7] Starting Docker containers..." -ForegroundColor Yellow
 
     Push-Location $ScriptDir
     try {
@@ -302,7 +304,7 @@ else {
     # Step 5: Wait for database to be ready
     # ─────────────────────────────────────────────
     Write-Host ""
-    Write-Host "[5/6] Waiting for database import to complete..." -ForegroundColor Yellow
+    Write-Host "[5/7] Waiting for database import to complete..." -ForegroundColor Yellow
     Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
     Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
     Write-Host ""
@@ -340,7 +342,7 @@ else {
         # Step 6: Install WP-CLI and replace URLs
         # ─────────────────────────────────────────────
         Write-Host ""
-        Write-Host "[6/6] Replacing production URLs with localhost..." -ForegroundColor Yellow
+        Write-Host "[6/7] Replacing production URLs with localhost..." -ForegroundColor Yellow
         
         $productionUrl = "https://waikatotainui.com"
         $localUrl = "http://localhost:$WpPort"
@@ -363,6 +365,28 @@ wp --allow-root search-replace '$productionUrl' '$localUrl' --all-tables --repor
             Write-Host "  URL replacement complete: $productionUrl -> $localUrl" -ForegroundColor Green
         } else {
             Write-Host "  WARNING: URL replacement may have failed. Check output above." -ForegroundColor Yellow
+        }
+        
+        # ─────────────────────────────────────────────
+        # Step 7: Disable Gravity Forms notifications
+        # ─────────────────────────────────────────────
+        Write-Host ""
+        if ($DisableGfNotifications) {
+            Write-Host "[7/7] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+            
+            $gfSql = 'UPDATE wp_gf_form_meta SET notifications = REPLACE(notifications, ''"isActive":true'', ''"isActive":false'') WHERE notifications LIKE ''%isActive%'';'
+            
+            docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" "$DbName" -e $gfSql 2>&1 | ForEach-Object {
+                Write-Host "  $_" -ForegroundColor DarkGray
+            }
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "  Gravity Forms notifications disabled." -ForegroundColor Green
+            } else {
+                Write-Host "  WARNING: Failed to disable Gravity Forms notifications." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "[7/7] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
         }
     }
 }
