@@ -1,3 +1,5 @@
 /Backup
 /wordpress
 /database
+/backup-config.json
+/backup.log
