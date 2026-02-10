@@ -63,7 +63,7 @@ Write-Host ""
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/5] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/6] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check Docker
 try {
@@ -99,7 +99,7 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 # Step 2: Copy backup files
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/5] Copying backup files..." -ForegroundColor Yellow
+Write-Host "[2/6] Copying backup files..." -ForegroundColor Yellow
 
 $WorkingWpDir = Join-Path $ScriptDir "wordpress"
 $WorkingDbDir = Join-Path $ScriptDir "database"
@@ -177,7 +177,7 @@ if (-not (Test-Path $WorkingDbDir)) {
 # Step 3: Patch wp-config.php for local Docker
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/5] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+Write-Host "[3/6] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
 $WpConfigPath = Join-Path $WorkingWpDir "wp-config.php"
 
@@ -277,12 +277,13 @@ foreach ($file in $filesToRemove) {
 # ─────────────────────────────────────────────
 if ($SkipDocker) {
     Write-Host ""
-    Write-Host "[4/5] Skipping Docker start (-SkipDocker)" -ForegroundColor DarkYellow
-    Write-Host "[5/5] Skipping health check (-SkipDocker)" -ForegroundColor DarkYellow
+    Write-Host "[4/6] Skipping Docker start (-SkipDocker)" -ForegroundColor DarkYellow
+    Write-Host "[5/6] Skipping health check (-SkipDocker)" -ForegroundColor DarkYellow
+    Write-Host "[6/6] Skipping URL replacement (-SkipDocker)" -ForegroundColor DarkYellow
 }
 else {
     Write-Host ""
-    Write-Host "[4/5] Starting Docker containers..." -ForegroundColor Yellow
+    Write-Host "[4/6] Starting Docker containers..." -ForegroundColor Yellow
 
     Push-Location $ScriptDir
     try {
@@ -301,7 +302,7 @@ else {
     # Step 5: Wait for database to be ready
     # ─────────────────────────────────────────────
     Write-Host ""
-    Write-Host "[5/5] Waiting for database import to complete..." -ForegroundColor Yellow
+    Write-Host "[5/6] Waiting for database import to complete..." -ForegroundColor Yellow
     Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
     Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
     Write-Host ""
@@ -334,6 +335,35 @@ else {
         Write-Host "  The import may still be running. Check with:" -ForegroundColor Red
         Write-Host "    docker compose logs -f db" -ForegroundColor White
         Write-Host ""
+    } else {
+        # ─────────────────────────────────────────────
+        # Step 6: Install WP-CLI and replace URLs
+        # ─────────────────────────────────────────────
+        Write-Host ""
+        Write-Host "[6/6] Replacing production URLs with localhost..." -ForegroundColor Yellow
+        
+        $productionUrl = "https://waikatotainui.com"
+        $localUrl = "http://localhost:$WpPort"
+        
+        # Install WP-CLI if not present, then run search-replace
+        $wpCliScript = @"
+if ! command -v wp &> /dev/null; then
+    curl -sO https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+    chmod +x wp-cli.phar
+    mv wp-cli.phar /usr/local/bin/wp
+fi
+wp --allow-root search-replace '$productionUrl' '$localUrl' --all-tables --report-changed-only
+"@
+        
+        docker compose exec -T wordpress bash -c $wpCliScript 2>&1 | ForEach-Object { 
+            Write-Host "  $_" -ForegroundColor DarkGray 
+        }
+        
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  URL replacement complete: $productionUrl -> $localUrl" -ForegroundColor Green
+        } else {
+            Write-Host "  WARNING: URL replacement may have failed. Check output above." -ForegroundColor Yellow
+        }
     }
 }
 
@@ -349,10 +379,6 @@ Write-Host ""
 Write-Host "  DB Name:     $DbName" -ForegroundColor DarkGray
 Write-Host "  DB User:     $DbUser" -ForegroundColor DarkGray
 Write-Host "  DB Password: $DbPassword" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "  NOTE: The site URL in the database is still 'https://waikatotainui.com'." -ForegroundColor DarkYellow
-Write-Host "  If links/images don't work locally, you may need to run a search-replace:" -ForegroundColor DarkYellow
-Write-Host "    docker compose exec wordpress wp search-replace 'https://waikatotainui.com' 'http://localhost:$WpPort' --all-tables --allow-root" -ForegroundColor White
 Write-Host ""
 Write-Host "  Useful commands:" -ForegroundColor DarkGray
 Write-Host "    docker compose logs -f db          # Watch DB import progress" -ForegroundColor DarkGray
