@@ -343,7 +343,12 @@ Write-Host ""
 if ($DisableGfNotifications) {
     Write-Host "[7/8] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
     
-    $gfSql = 'UPDATE wp_gf_form_meta SET notifications = REPLACE(notifications, ''"isActive":true'', ''"isActive":false'') WHERE notifications LIKE ''%isActive%'';'
+    # Use a here-string to avoid quote escaping issues
+    $gfSql = @"
+UPDATE wp_gf_form_meta 
+SET notifications = REPLACE(notifications, '"isActive":true', '"isActive":false') 
+WHERE notifications LIKE '%isActive%';
+"@
     
     docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" "$DbName" -e $gfSql 2>&1 | ForEach-Object {
         Write-Host "  $_" -ForegroundColor DarkGray
@@ -365,7 +370,12 @@ Write-Host ""
 if ($GfWebhookRedirectHost) {
     Write-Host "[8/8] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
     
-    $webhookSql = "UPDATE wp_gf_addon_feed SET meta = REPLACE(meta, ''hook.us1.make.com'', ''$GfWebhookRedirectHost'') WHERE meta LIKE ''%hook.us1.make.com%'';"
+    # Use a here-string to avoid quote escaping issues
+    $webhookSql = @"
+UPDATE wp_gf_addon_feed 
+SET meta = REPLACE(meta, 'hook.us1.make.com', '$GfWebhookRedirectHost') 
+WHERE meta LIKE '%hook.us1.make.com%';
+"@
     
     docker compose exec -T db mariadb -u"$DbUser" -p"$DbPassword" "$DbName" -e $webhookSql 2>&1 | ForEach-Object {
         Write-Host "  $_" -ForegroundColor DarkGray
