@@ -21,7 +21,7 @@ services:
       --innodb_flush_method=O_DIRECT
 
   wordpress:
-    image: wordpress:6.9-php8.2-apache
+    image: wordpress:6.8.3-php8.2-apache
     restart: unless-stopped
     depends_on:
       db:
