@@ -48,6 +48,7 @@ $WpPort = $EnvVars["WORDPRESS_PORT"]
 $PmaPort = $EnvVars["PHPMYADMIN_PORT"]
 $DisableGfNotifications = $EnvVars["DISABLE_GF_NOTIFICATIONS"] -eq "true"
 $GfWebhookRedirectHost = $EnvVars["GF_WEBHOOK_REDIRECT_HOST"]
+$DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
 
 Write-Host ""
 Write-Host "=== WordPress Local Setup ===" -ForegroundColor Cyan
@@ -222,6 +223,21 @@ $replacement = "define( 'WP_REDIS_DISABLED', true ); // Patched for Docker: was 
 if ($config.Contains($original)) {
     $config = $config.Replace($original, $replacement)
     $changes += "WP_REDIS_DISABLED: false -> true"
+}
+
+# --- DISALLOW_FILE_MODS: based on .env setting ---
+$newValue = $DisallowFileMods.ToString().ToLower()
+$originalTrue = "define('DISALLOW_FILE_MODS', true);"
+$originalFalse = "define('DISALLOW_FILE_MODS', false);"
+$replacement = "define('DISALLOW_FILE_MODS', $newValue);"
+
+if ($config.Contains($originalTrue)) {
+    $config = $config.Replace($originalTrue, $replacement)
+    $changes += "DISALLOW_FILE_MODS: true -> $newValue"
+}
+elseif ($config.Contains($originalFalse)) {
+    $config = $config.Replace($originalFalse, $replacement)
+    $changes += "DISALLOW_FILE_MODS: false -> $newValue"
 }
 
 # Write patched config
