@@ -33,6 +33,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$WorkingDir = Split-Path -Parent $ScriptDir  # Parent directory (C:\repos\Tainui\WP)
 
 # ─────────────────────────────────────────────
 # Check/Install WinSCP
@@ -174,7 +175,7 @@ if (-not $password) {
 # Build WinSCP script
 # ─────────────────────────────────────────────
 
-$localPath = Join-Path $ScriptDir "Backup\wordpress"
+$localPath = Join-Path $WorkingDir "Backup\wordpress"
 
 # Ensure local directory exists
 if (-not (Test-Path $localPath)) {

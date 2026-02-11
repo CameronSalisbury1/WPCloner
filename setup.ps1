@@ -19,6 +19,7 @@
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$WorkingDir = Split-Path -Parent $ScriptDir  # Parent directory (C:\repos\Tainui\WP)
 
 # ─────────────────────────────────────────────
 # Load .env file
@@ -69,7 +70,7 @@ catch {
 }
 
 # Check backup directory
-$BackupDir = Join-Path $ScriptDir "Backup"
+$BackupDir = Join-Path $WorkingDir "Backup"
 $BackupWpDir = Join-Path $BackupDir "wordpress"
 $BackupDbDir = Join-Path $BackupDir "database"
 $BackupDbFile = Join-Path $BackupDbDir "database"
@@ -93,8 +94,8 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 Write-Host ""
 Write-Host "[2/8] Copying backup files..." -ForegroundColor Yellow
 
-$WorkingWpDir = Join-Path $ScriptDir "wordpress"
-$WorkingDbDir = Join-Path $ScriptDir "database"
+$WorkingWpDir = Join-Path $WorkingDir "wordpress"
+$WorkingDbDir = Join-Path $WorkingDir "database"
 
 # Handle WordPress directory
 if (Test-Path $WorkingWpDir) {

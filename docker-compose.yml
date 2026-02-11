@@ -9,7 +9,7 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD}
     volumes:
       - db_data:/var/lib/mysql
-      - ./database:/docker-entrypoint-initdb.d
+      - ../database:/docker-entrypoint-initdb.d
     ports:
       - "3306:3306"
     # Give MariaDB more time/resources for the large SQL import
@@ -37,7 +37,7 @@ services:
       WORDPRESS_DB_USER: ${DB_USER}
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - ./wordpress:/var/www/html
+      - ../wordpress:/var/www/html
 
   phpmyadmin:
     image: phpmyadmin:latest
