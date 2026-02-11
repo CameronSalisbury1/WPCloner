@@ -248,6 +248,58 @@ foreach ($file in $filesToRemove) {
     }
 }
 
+# --- Append Gravity Flow webhook HMAC signing code ---
+$hmacCode = @'
+
+// Gravity Flow Webhook HMAC Signing
+add_filter( 'gravityflow_webhook_args', function( $args, $entry, $current_step ) {
+    $secret = 'wt-webhook-secret-2024-hmac-signing';
+
+    // Get the body - check what format it's in
+    $body = isset( $args['body'] ) ? $args['body'] : '';
+
+    // Convert to string if it's an array (this might be the issue!)
+    if ( is_array( $body ) ) {
+        error_log( '[GF HMAC DEBUG] Body is an ARRAY - converting to query string' );
+        error_log( '[GF HMAC DEBUG] Array keys: ' . implode( ', ', array_keys( $body ) ) );
+        $body = http_build_query( $body );
+    } else {
+        error_log( '[GF HMAC DEBUG] Body is already a STRING' );
+    }
+
+    // Log body details for debugging
+    error_log( '[GF HMAC DEBUG] Body length: ' . strlen( $body ) );
+    error_log( '[GF HMAC DEBUG] Body first 200 chars: ' . substr( $body, 0, 200 ) );
+    error_log( '[GF HMAC DEBUG] Body last 50 chars: ' . substr( $body, -50 ) );
+
+    // Compute HMAC
+    $signature = hash_hmac( 'sha256', $body, $secret );
+
+    // Log the computed signature
+    error_log( '[GF HMAC DEBUG] Computed signature: ' . $signature );
+    error_log( '[GF HMAC DEBUG] Full header value: sha256=' . $signature );
+
+    // Set headers
+    $args['headers']['X-Hub-Signature-256'] = 'sha256=' . $signature;
+    $args['headers']['X-atanga'] = 'haumaru';
+
+    // Important: Ensure the body that gets sent is the SAME as what we computed HMAC on
+    $args['body'] = $body;
+
+    // Log what we're about to send
+    error_log( '[GF HMAC DEBUG] Final args body type: ' . gettype( $args['body'] ) );
+    error_log( '[GF HMAC DEBUG] Final args body length: ' . strlen( $args['body'] ) );
+
+    return $args;
+}, 10, 4 );
+'@
+
+# Check if HMAC code already exists
+if (-not $config.Contains('gravityflow_webhook_args')) {
+    Add-Content -Path $WpConfigPath -Value $hmacCode
+    Write-Host "  Added Gravity Flow webhook HMAC signing code" -ForegroundColor Green
+}
+
 # ─────────────────────────────────────────────
 # Step 4: Start Docker containers
 # ─────────────────────────────────────────────
