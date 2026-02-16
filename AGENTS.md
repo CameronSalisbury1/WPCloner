@@ -4,10 +4,10 @@ This repository contains PowerShell scripts for setting up a local WordPress dev
 
 ## Repository Overview
 
-**Purpose**: Deploy production WordPress backups locally using either Docker (legacy) or XAMPP (native Windows).
+**Purpose**: Deploy production WordPress backups locally using either Docker (legacy) or Laragon (native Windows).
 
 **Key Scripts**:
-- `setup-native.ps1` - **Primary script**: Native Windows setup using XAMPP (replaces Docker version)
+- `setup-native.ps1` - **Primary script**: Native Windows setup using Laragon (replaces Docker version)
 - `setup.ps1` - Legacy Docker-based setup (deprecated)
 - `backup.ps1` - Download WordPress files from production SFTP server using WinSCP
 
@@ -18,7 +18,7 @@ This repository contains PowerShell scripts for setting up a local WordPress dev
 ### Running Scripts
 
 ```powershell
-# Primary setup (native XAMPP)
+# Primary setup (native Laragon)
 .\setup-native.ps1
 .\setup-native.ps1 -Force  # Wipe existing setup and start fresh
 
@@ -57,36 +57,40 @@ docker compose logs -f db              # Watch DB import progress
 docker compose logs -f wordpress       # Watch WordPress logs
 ```
 
-### XAMPP Commands (Native)
+### Laragon Commands (Native)
 
 ```bash
-# Start/stop services via XAMPP Control Panel
-C:\xampp\xampp-control.exe
+# Start/stop services via Laragon Control Panel
+C:\laragon\laragon.exe
 
-# WP-CLI usage
-php %USERPROFILE%\.wp-cli\wp-cli.phar --path="C:\xampp\htdocs" <command>
+# WP-CLI usage (Laragon auto-detects PHP version)
+C:\laragon\bin\php\php-8.3.30-Win32-vs16-x64\php.exe %USERPROFILE%\.wp-cli\wp-cli.phar --path="C:\laragon\www\wordpress" <command>
 
 # Direct MySQL access
-C:\xampp\mysql\bin\mysql.exe -uroot -e "USE wordpress; SELECT * FROM wp_users;"
+C:\laragon\bin\mysql\mysql-8.4.3-winx64\bin\mysql.exe -uroot -e "USE wordpress; SELECT * FROM wp_users;"
+
+# Laragon virtual hosts (auto-created for folders in www/)
+# Folder: C:\laragon\www\wordpress → URL: http://wordpress.test
 ```
 
 ### Testing Individual Components
 
 **Test database connectivity**:
 ```powershell
-# Native XAMPP
-C:\xampp\mysql\bin\mysql.exe -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
+# Native Laragon
+C:\laragon\bin\mysql\mysql-8.4.3-winx64\bin\mysql.exe -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
 
 # Docker
 docker compose exec -T db mariadb -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
 ```
 
 **Test WordPress availability**:
-- Native: `http://localhost`
+- Native: `http://wordpress.test` (via Laragon auto virtual host)
+- Fallback: `http://localhost/wordpress`
 - Docker: `http://localhost:8080`
 
-**Test phpMyAdmin**:
-- Native: `http://localhost/phpmyadmin`
+**Test phpMyAdmin/Database tools**:
+- Native: Use HeidiSQL (bundled with Laragon) or `http://localhost/phpmyadmin` if configured
 - Docker: `http://localhost:8081`
 
 ## Code Style Guidelines
@@ -227,7 +231,7 @@ When modifying `wp-config.php`:
 **URL replacement**:
 - Use WP-CLI `search-replace` command
 - Production URL: `https://waikatotainui.com`
-- Local URL: `http://localhost` (native) or `http://localhost:<PORT>` (Docker)
+- Local URL: `http://wordpress.test` (native) or `http://localhost:<PORT>` (Docker)
 - Always use `--all-tables --report-changed-only` flags
 
 ### Gravity Forms Configuration
@@ -268,21 +272,26 @@ wp-setup/
 ├── backup.log               # WinSCP transfer log (gitignored)
 ├── docker-compose.yml       # Docker services definition
 ├── setup.ps1                # Legacy Docker setup
-├── setup-native.ps1         # Primary XAMPP setup
+├── setup-native.ps1         # Primary Laragon setup
 └── AGENTS.md               # This file
 
 Working directories (created by scripts, gitignored):
 ├── Backup/                  # Production files downloaded by backup.ps1
 │   ├── wordpress/          # Production WordPress files
 │   └── database/           # Production database dump
-├── wordpress/              # Working copy for Docker
-└── database/               # Database with USE statement for Docker
+└── database/               # Database with USE statement (working copy)
+
+Laragon directories (external to this repo):
+├── C:\laragon\www\wordpress  # WordPress files deployed by setup-native.ps1
+└── C:\laragon\data\mysql     # MySQL database files
 ```
 
 ## External Dependencies
 
-- **XAMPP**: Apache, PHP 8.2, MySQL/MariaDB (for native setup)
-- **Docker Desktop**: Required for legacy setup
+- **Laragon**: Full-featured local development environment with Apache, PHP 8.3, MySQL 8.4 (for native setup)
+  - Download from: https://laragon.org
+  - Features: Auto virtual hosts, HeidiSQL, built-in tools
+- **Docker Desktop**: Required for legacy setup (deprecated)
 - **WinSCP**: SFTP client for backup.ps1 (auto-installs via winget)
 - **WP-CLI**: WordPress command-line tool (auto-downloads to `~/.wp-cli/`)
 

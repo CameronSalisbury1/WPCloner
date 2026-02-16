@@ -1,15 +1,15 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Sets up a local WordPress instance from a production backup using XAMPP (native Windows).
+    Sets up a local WordPress instance from a production backup using Laragon.
 
 .DESCRIPTION
     This script:
-    1. Verifies XAMPP installation (Apache, MySQL/MariaDB, PHP)
-    2. Copies backup files to XAMPP's htdocs directory
+    1. Verifies Laragon installation and services
+    2. Copies backup files to the Laragon www/wordpress directory
     3. Patches wp-config.php for the local environment
     4. Creates the database and imports the SQL dump
-    5. Replaces production URLs with localhost
+    5. Replaces production URLs with wordpress.test
     6. Disables Gravity Forms notifications (optional)
     7. Redirects webhooks (optional)
 
@@ -24,7 +24,7 @@
     # Wipes everything and starts fresh from Backup/
 
 .NOTES
-    Requires XAMPP to be installed. Download from https://www.apachefriends.org/
+    Requires Laragon to be installed and running. Download from https://laragon.org
 #>
 
 param(
@@ -38,10 +38,15 @@ $WorkingDir = Split-Path -Parent $ScriptDir  # Parent directory (C:\repos\Tainui
 # ─────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────
-$XamppPath = "C:\xampp"
-$HtdocsPath = Join-Path $XamppPath "htdocs"
-$MysqlPath = Join-Path $XamppPath "mysql\bin"
-$PhpPath = Join-Path $XamppPath "php"
+$LaragonRoot = "C:\laragon"
+$WpDir = Join-Path $LaragonRoot "www\wordpress"
+$LocalDomain = "wordpress.test"
+
+# Auto-detect PHP and MySQL paths
+$PhpDir = Get-ChildItem (Join-Path $LaragonRoot "bin\php") | Select-Object -First 1 -ExpandProperty FullName
+$MysqlDir = Get-ChildItem (Join-Path $LaragonRoot "bin\mysql") | Select-Object -First 1 -ExpandProperty FullName
+$PhpExe = Join-Path $PhpDir "php.exe"
+$MysqlExe = Join-Path $MysqlDir "bin\mysql.exe"
 
 # ─────────────────────────────────────────────
 # Load .env file
@@ -67,13 +72,12 @@ $DbName = $EnvVars["DB_NAME"]
 $DbUser = $EnvVars["DB_USER"]
 $DbPassword = $EnvVars["DB_PASSWORD"]
 $DbRootPassword = $EnvVars["DB_ROOT_PASSWORD"]
-$WpPort = $EnvVars["WORDPRESS_PORT"]
 $DisableGfNotifications = $EnvVars["DISABLE_GF_NOTIFICATIONS"] -eq "true"
 $GfWebhookRedirectHost = $EnvVars["GF_WEBHOOK_REDIRECT_HOST"]
 $DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
 
 Write-Host ""
-Write-Host "=== WordPress Native Windows Setup (XAMPP) ===" -ForegroundColor Cyan
+Write-Host "=== WordPress Laragon Setup ===" -ForegroundColor Cyan
 if ($Force) {
     Write-Host "    [FORCE MODE - Will wipe and recopy from Backup/]" -ForegroundColor Red
 }
@@ -85,20 +89,17 @@ Write-Host ""
 if ($Force) {
     Write-Host "[0/9] Force mode: Wiping existing setup..." -ForegroundColor Red
     
-    $WpDestDir = $HtdocsPath
-    $WorkingDbDir = Join-Path $WorkingDir "database"
-    $mysqlCmd = Join-Path $MysqlPath "mysql.exe"
-    
-    # Remove all files from htdocs
-    if (Test-Path $WpDestDir) {
-        Write-Host "  Removing all files from $WpDestDir ..." -ForegroundColor White
-        Get-ChildItem -Path $WpDestDir -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "  htdocs cleared." -ForegroundColor Green
+    # Remove all files from wordpress directory
+    if (Test-Path $WpDir) {
+        Write-Host "  Removing all files from $WpDir ..." -ForegroundColor White
+        Get-ChildItem -Path $WpDir -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  WordPress directory cleared." -ForegroundColor Green
     } else {
-        Write-Host "  htdocs directory not found, skipping." -ForegroundColor DarkGray
+        Write-Host "  WordPress directory not found, skipping." -ForegroundColor DarkGray
     }
     
     # Remove working database directory
+    $WorkingDbDir = Join-Path $WorkingDir "database"
     if (Test-Path $WorkingDbDir) {
         Write-Host "  Removing $WorkingDbDir ..." -ForegroundColor White
         Remove-Item $WorkingDbDir -Recurse -Force
@@ -107,30 +108,24 @@ if ($Force) {
         Write-Host "  Database directory not found, skipping." -ForegroundColor DarkGray
     }
     
-    # Drop the database (need MySQL running for this)
-    $mysqlRunning = Get-Process -Name "mysqld" -ErrorAction SilentlyContinue
-    if ($mysqlRunning) {
-        Write-Host "  Dropping database '$DbName'..." -ForegroundColor White
-        $dropDbSql = "DROP DATABASE IF EXISTS ``$DbName``;"
-        & $mysqlCmd -uroot -e $dropDbSql 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "  Database dropped." -ForegroundColor Green
-        } else {
-            Write-Host "  Could not drop database (may not exist)." -ForegroundColor DarkYellow
-        }
-        
-        # Also drop the user to ensure clean state
-        Write-Host "  Dropping user '$DbUser'..." -ForegroundColor White
-        $dropUserSql = "DROP USER IF EXISTS '$DbUser'@'localhost';"
-        & $mysqlCmd -uroot -e $dropUserSql 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "  User dropped." -ForegroundColor Green
-        } else {
-            Write-Host "  Could not drop user (may not exist)." -ForegroundColor DarkYellow
-        }
+    # Drop the database
+    Write-Host "  Dropping database '$DbName'..." -ForegroundColor White
+    $dropDbSql = "DROP DATABASE IF EXISTS ``$DbName``;"
+    & $MysqlExe -uroot -e $dropDbSql 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Database dropped." -ForegroundColor Green
     } else {
-        Write-Host "  MySQL not running, skipping database cleanup." -ForegroundColor DarkYellow
-        Write-Host "  Start MySQL and re-run with -Force if needed." -ForegroundColor DarkGray
+        Write-Host "  Could not drop database (may not exist)." -ForegroundColor DarkYellow
+    }
+    
+    # Also drop the user to ensure clean state
+    Write-Host "  Dropping user '$DbUser'..." -ForegroundColor White
+    $dropUserSql = "DROP USER IF EXISTS '$DbUser'@'localhost';"
+    & $MysqlExe -uroot -e $dropUserSql 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  User dropped." -ForegroundColor Green
+    } else {
+        Write-Host "  Could not drop user (may not exist)." -ForegroundColor DarkYellow
     }
     
     Write-Host ""
@@ -141,80 +136,55 @@ if ($Force) {
 # ─────────────────────────────────────────────
 Write-Host "[1/9] Pre-flight checks..." -ForegroundColor Yellow
 
-# Check XAMPP installation
-if (-not (Test-Path $XamppPath)) {
+# Check if Laragon is installed
+if (-not (Test-Path $LaragonRoot)) {
+    Write-Host "  Laragon: NOT FOUND" -ForegroundColor Red
     Write-Host ""
-    Write-Host "  XAMPP not found at $XamppPath" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "  Please install XAMPP first:" -ForegroundColor White
-    Write-Host "    1. Download from https://www.apachefriends.org/download.html" -ForegroundColor DarkGray
-    Write-Host "    2. Install to C:\xampp (default location)" -ForegroundColor DarkGray
-    Write-Host "    3. Run this script again" -ForegroundColor DarkGray
+    Write-Host "  Laragon not found at $LaragonRoot" -ForegroundColor Yellow
+    Write-Host "  Please install Laragon from https://laragon.org" -ForegroundColor DarkGray
     Write-Host ""
     exit 1
 }
-Write-Host "  XAMPP installation: OK ($XamppPath)" -ForegroundColor Green
+Write-Host "  Laragon: OK (installed at $LaragonRoot)" -ForegroundColor Green
 
-# Check MySQL binary
-$MysqlExe = Join-Path $MysqlPath "mysql.exe"
-if (-not (Test-Path $MysqlExe)) {
-    Write-Error "MySQL client not found at $MysqlExe"
-    exit 1
-}
-Write-Host "  MySQL client: OK" -ForegroundColor Green
-
-# Check PHP binary
-$PhpExe = Join-Path $PhpPath "php.exe"
+# Check if PHP exists
 if (-not (Test-Path $PhpExe)) {
-    Write-Error "PHP not found at $PhpExe"
+    Write-Error "PHP not found at: $PhpExe"
+    exit 1
+}
+
+# Check if MySQL exists
+if (-not (Test-Path $MysqlExe)) {
+    Write-Error "MySQL not found at: $MysqlExe"
+    exit 1
+}
+
+# Check if wordpress directory is linked
+if (-not (Test-Path $WpDir)) {
+    Write-Host "  Creating wordpress directory..." -ForegroundColor White
+    New-Item -ItemType Directory -Path $WpDir -Force | Out-Null
+    Write-Host "  WordPress directory created." -ForegroundColor Green
+}
+
+# Check MySQL connectivity
+try {
+    & $MysqlExe -uroot -e "SELECT 1;" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  MySQL: OK (connection successful)" -ForegroundColor Green
+    } else {
+        Write-Error "MySQL connection failed. Please ensure Laragon services are running."
+        exit 1
+    }
+} catch {
+    Write-Error "MySQL not accessible. Please start Laragon and ensure MySQL service is running."
     exit 1
 }
 
 # Get PHP version
 $phpVersion = & $PhpExe -v 2>&1 | Select-Object -First 1
-if ($phpVersion -match "PHP (\d+\.\d+)") {
+if ($phpVersion -match "PHP (\d+\.\d+\.\d+)") {
     Write-Host "  PHP: OK (v$($Matches[1]))" -ForegroundColor Green
 }
-
-# Check if Apache is running
-$apacheRunning = Get-Process -Name "httpd" -ErrorAction SilentlyContinue
-if (-not $apacheRunning) {
-    Write-Host "  Apache: NOT RUNNING" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "  Please start Apache from XAMPP Control Panel before continuing." -ForegroundColor Yellow
-    Write-Host "  Run: $XamppPath\xampp-control.exe" -ForegroundColor DarkGray
-    Write-Host ""
-    
-    $response = Read-Host "  Press Enter after starting Apache, or 'q' to quit"
-    if ($response -eq 'q') { exit 1 }
-    
-    $apacheRunning = Get-Process -Name "httpd" -ErrorAction SilentlyContinue
-    if (-not $apacheRunning) {
-        Write-Error "Apache is still not running. Please start it from XAMPP Control Panel."
-        exit 1
-    }
-}
-Write-Host "  Apache: RUNNING" -ForegroundColor Green
-
-# Check if MySQL is running
-$mysqlRunning = Get-Process -Name "mysqld" -ErrorAction SilentlyContinue
-if (-not $mysqlRunning) {
-    Write-Host "  MySQL: NOT RUNNING" -ForegroundColor Red
-    Write-Host ""
-    Write-Host "  Please start MySQL from XAMPP Control Panel before continuing." -ForegroundColor Yellow
-    Write-Host "  Run: $XamppPath\xampp-control.exe" -ForegroundColor DarkGray
-    Write-Host ""
-    
-    $response = Read-Host "  Press Enter after starting MySQL, or 'q' to quit"
-    if ($response -eq 'q') { exit 1 }
-    
-    $mysqlRunning = Get-Process -Name "mysqld" -ErrorAction SilentlyContinue
-    if (-not $mysqlRunning) {
-        Write-Error "MySQL is still not running. Please start it from XAMPP Control Panel."
-        exit 1
-    }
-}
-Write-Host "  MySQL: RUNNING" -ForegroundColor Green
 
 # Check backup directory
 $BackupDir = Join-Path $WorkingDir "Backup"
@@ -236,24 +206,21 @@ $dbFileSize = (Get-Item $BackupDbFile).Length / 1MB
 Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)" -ForegroundColor Green
 
 # ─────────────────────────────────────────────
-# Step 2: Copy WordPress files to htdocs root
+# Step 2: Copy WordPress files
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/9] Copying WordPress files to XAMPP htdocs root..." -ForegroundColor Yellow
-
-$WpDestDir = $HtdocsPath
+Write-Host "[2/9] Copying WordPress files..." -ForegroundColor Yellow
 
 # Check if WordPress is already deployed (look for wp-config.php)
-$wpConfigCheck = Join-Path $WpDestDir "wp-config.php"
+$wpConfigCheck = Join-Path $WpDir "wp-config.php"
 if (Test-Path $wpConfigCheck) {
-    Write-Host "  WordPress already deployed to $WpDestDir, skipping copy." -ForegroundColor DarkYellow
+    Write-Host "  WordPress already deployed to $WpDir, skipping copy." -ForegroundColor DarkYellow
 } else {
-    Write-Host "  Copying Backup/wordpress/ -> $WpDestDir ..." -ForegroundColor White
+    Write-Host "  Copying Backup/wordpress/ -> $WpDir ..." -ForegroundColor White
     Write-Host "  (This may take a while for large uploads)" -ForegroundColor DarkGray
 
     # Use robocopy for better performance with large directory trees
-    # Copy contents of wordpress folder to htdocs root using /E and wildcard file spec
-    $robocopyArgs = @($BackupWpDir, $WpDestDir, "*.*", "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/MT:8")
+    $robocopyArgs = @($BackupWpDir, $WpDir, "*.*", "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/MT:8")
     & robocopy @robocopyArgs | Out-Null
 
     # Robocopy exit codes: 0-7 are success, 8+ are errors
@@ -262,7 +229,7 @@ if (Test-Path $wpConfigCheck) {
         exit 1
     }
 
-    Write-Host "  WordPress files copied to htdocs root." -ForegroundColor Green
+    Write-Host "  WordPress files copied." -ForegroundColor Green
 }
 
 # ─────────────────────────────────────────────
@@ -304,7 +271,7 @@ if (Test-Path $ImportSqlPath) {
 Write-Host ""
 Write-Host "[4/9] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
-$WpConfigPath = Join-Path $WpDestDir "wp-config.php"
+$WpConfigPath = Join-Path $WpDir "wp-config.php"
 
 if (-not (Test-Path $WpConfigPath)) {
     Write-Error "wp-config.php not found at: $WpConfigPath (was the copy successful?)"
@@ -315,9 +282,6 @@ $config = Get-Content $WpConfigPath -Raw
 
 # Track what we change
 $changes = @()
-
-# --- DB_HOST: localhost stays localhost for native setup ---
-# (no change needed, but let's ensure it's localhost)
 
 # --- DB_NAME ---
 $original = "define('DB_NAME', 'ndshewxtpp');"
@@ -345,7 +309,7 @@ if ($config.Contains($original)) {
 
 # --- DB_HOST: Make sure it's localhost ---
 $original = "define('DB_HOST', 'db');"
-$replacement = "define('DB_HOST', 'localhost'); // Patched for native: was 'db' (Docker)"
+$replacement = "define('DB_HOST', 'localhost'); // Patched for Laragon: was 'db' (Docker)"
 if ($config.Contains($original)) {
     $config = $config.Replace($original, $replacement)
     $changes += "DB_HOST: db -> localhost"
@@ -403,8 +367,8 @@ if ($changes.Count -eq 0) {
 
 # --- Remove caching drop-ins that reference production paths ---
 $filesToRemove = @(
-    (Join-Path $WpDestDir "wp-content\advanced-cache.php"),
-    (Join-Path $WpDestDir "wp-content\object-cache.php")
+    (Join-Path $WpDir "wp-content\advanced-cache.php"),
+    (Join-Path $WpDir "wp-content\object-cache.php")
 )
 
 foreach ($file in $filesToRemove) {
@@ -477,14 +441,10 @@ if (-not $currentConfig.Contains('gravityflow_webhook_args')) {
 Write-Host ""
 Write-Host "[5/9] Creating database and user..." -ForegroundColor Yellow
 
-# XAMPP MySQL typically has root with no password by default
-$mysqlCmd = Join-Path $MysqlPath "mysql.exe"
-
 # Create database
 $createDbSql = "CREATE DATABASE IF NOT EXISTS ``$DbName`` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-$result = & $mysqlCmd -uroot -e $createDbSql 2>&1
+$result = & $MysqlExe -uroot -e $createDbSql 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "  Note: If MySQL has a root password, you may need to configure it." -ForegroundColor Yellow
     Write-Host "  Error: $result" -ForegroundColor Red
     exit 1
 }
@@ -497,13 +457,13 @@ GRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'localhost';
 FLUSH PRIVILEGES;
 "@
 
-$result = & $mysqlCmd -uroot -e $createUserSql 2>&1
+$result = & $MysqlExe -uroot -e $createUserSql 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  User '$DbUser' created with privileges on '$DbName'." -ForegroundColor Green
 } else {
     # User might already exist, try just granting privileges
     $grantSql = "GRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'localhost'; FLUSH PRIVILEGES;"
-    & $mysqlCmd -uroot -e $grantSql 2>&1 | Out-Null
+    & $MysqlExe -uroot -e $grantSql 2>&1 | Out-Null
     Write-Host "  User '$DbUser' privileges updated." -ForegroundColor Green
 }
 
@@ -516,16 +476,16 @@ Write-Host "  Importing $([math]::Round($dbFileSize, 0)) MB SQL dump. This may t
 
 # Check if database already has tables (skip import if so)
 $checkTablesSql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DbName';"
-$tableCount = & $mysqlCmd -uroot -N -e $checkTablesSql 2>&1
+$tableCount = & $MysqlExe -uroot -N -e $checkTablesSql 2>&1
 
 if ($tableCount -match "^\d+$" -and [int]$tableCount -gt 0) {
     Write-Host "  Database already has $tableCount tables, skipping import." -ForegroundColor DarkYellow
-    Write-Host "  To re-import, drop the database first: mysql -uroot -e ""DROP DATABASE $DbName;""" -ForegroundColor DarkGray
+    Write-Host "  To re-import, use: .\setup-native.ps1 -Force" -ForegroundColor DarkGray
 } else {
     $startTime = Get-Date
     
     # Import the SQL file
-    & $mysqlCmd -uroot $DbName -e "source $ImportSqlPath" 2>&1 | ForEach-Object {
+    & $MysqlExe -uroot $DbName -e "source $ImportSqlPath" 2>&1 | ForEach-Object {
         if ($_ -match "ERROR") {
             Write-Host "  $_" -ForegroundColor Red
         }
@@ -543,10 +503,10 @@ if ($tableCount -match "^\d+$" -and [int]$tableCount -gt 0) {
 # Step 7: Install WP-CLI and replace URLs
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[7/9] Replacing production URLs with localhost..." -ForegroundColor Yellow
+Write-Host "[7/9] Replacing production URLs with $LocalDomain..." -ForegroundColor Yellow
 
 $productionUrl = "https://waikatotainui.com"
-$localUrl = "http://localhost"
+$localUrl = "http://$LocalDomain"
 
 # Check if WP-CLI is installed
 $wpCliPath = Join-Path $env:USERPROFILE ".wp-cli\wp-cli.phar"
@@ -562,17 +522,13 @@ if (-not (Test-Path $wpCliPath)) {
     $wpCliUrl = "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar"
     Invoke-WebRequest -Uri $wpCliUrl -OutFile $wpCliPath -UseBasicParsing
     
-    # Create a batch wrapper for easier use
-    $batchContent = "@echo off`n`"$PhpExe`" `"$wpCliPath`" %*"
-    Set-Content -Path $wpCliBat -Value $batchContent
-    
     Write-Host "  WP-CLI installed to $wpCliPath" -ForegroundColor Green
 }
 
-# Run search-replace using WP-CLI
+# Run search-replace using WP-CLI with Laragon's PHP
 Write-Host "  Running search-replace: $productionUrl -> $localUrl" -ForegroundColor White
 
-Push-Location $WpDestDir
+Push-Location $WpDir
 try {
     $result = & $PhpExe $wpCliPath search-replace $productionUrl $localUrl --all-tables --report-changed-only 2>&1
     $result | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
@@ -595,7 +551,7 @@ if ($DisableGfNotifications) {
     
     $gfSql = "UPDATE wp_gf_form_meta SET notifications = REPLACE(notifications, '`"isActive`":true', '`"isActive`":false') WHERE notifications LIKE '%isActive%';"
     
-    & $mysqlCmd -u"$DbUser" -p"$DbPassword" $DbName -e $gfSql 2>&1 | ForEach-Object {
+    & $MysqlExe -u"$DbUser" -p"$DbPassword" $DbName -e $gfSql 2>&1 | ForEach-Object {
         if ($_ -notmatch "Warning.*password") {
             Write-Host "  $_" -ForegroundColor DarkGray
         }
@@ -619,7 +575,7 @@ if ($GfWebhookRedirectHost) {
     
     $webhookSql = "UPDATE wp_gf_addon_feed SET meta = REPLACE(meta, 'hook.us1.make.com', '$GfWebhookRedirectHost') WHERE meta LIKE '%hook.us1.make.com%';"
     
-    & $mysqlCmd -u"$DbUser" -p"$DbPassword" $DbName -e $webhookSql 2>&1 | ForEach-Object {
+    & $MysqlExe -u"$DbUser" -p"$DbPassword" $DbName -e $webhookSql 2>&1 | ForEach-Object {
         if ($_ -notmatch "Warning.*password") {
             Write-Host "  $_" -ForegroundColor DarkGray
         }
@@ -640,20 +596,26 @@ if ($GfWebhookRedirectHost) {
 Write-Host ""
 Write-Host "=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  WordPress:  http://localhost" -ForegroundColor White
-Write-Host "  phpMyAdmin: http://localhost/phpmyadmin" -ForegroundColor White
+Write-Host "  WordPress:  http://$LocalDomain" -ForegroundColor White
+Write-Host "              (Laragon auto-creates virtual hosts for folders in www/)" -ForegroundColor DarkGray
+Write-Host "              (or http://localhost/wordpress if .test domain doesn't work)" -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Note: If $LocalDomain doesn't work:" -ForegroundColor DarkYellow
+Write-Host "        1. Restart Laragon to trigger auto virtual host creation" -ForegroundColor DarkGray
+Write-Host "        2. Or right-click Laragon > Apache > Virtual Hosts > Auto create" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  DB Name:     $DbName" -ForegroundColor DarkGray
 Write-Host "  DB User:     $DbUser" -ForegroundColor DarkGray
 Write-Host "  DB Password: $DbPassword" -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "  WordPress files: $WpDestDir" -ForegroundColor DarkGray
+Write-Host "  WordPress files: $WpDir" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  Useful commands:" -ForegroundColor DarkGray
-Write-Host "    Start XAMPP:  $XamppPath\xampp-control.exe" -ForegroundColor DarkGray
-Write-Host "    WP-CLI:       php $wpCliPath --path=`"$WpDestDir`" <command>" -ForegroundColor DarkGray
+Write-Host "    WP-CLI:       $PhpExe $wpCliPath --path=`"$WpDir`" <command>" -ForegroundColor DarkGray
+Write-Host "    MySQL CLI:    $MysqlExe -u$DbUser -p$DbPassword $DbName" -ForegroundColor DarkGray
+Write-Host "    Laragon:      Start via Laragon Control Panel" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  To reset:" -ForegroundColor DarkGray
 Write-Host "    1. .\setup-native.ps1 -Force" -ForegroundColor DarkGray
-Write-Host "       (or manually: mysql -uroot -e `"DROP DATABASE $DbName;`")" -ForegroundColor DarkGray
+Write-Host "       (or manually: $MysqlExe -uroot -e `"DROP DATABASE $DbName;`")" -ForegroundColor DarkGray
 Write-Host ""
