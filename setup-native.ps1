@@ -85,17 +85,17 @@ Write-Host ""
 if ($Force) {
     Write-Host "[0/9] Force mode: Wiping existing setup..." -ForegroundColor Red
     
-    $WpDestDir = Join-Path $HtdocsPath "wordpress"
+    $WpDestDir = $HtdocsPath
     $WorkingDbDir = Join-Path $WorkingDir "database"
     $mysqlCmd = Join-Path $MysqlPath "mysql.exe"
     
-    # Remove WordPress files from htdocs
+    # Remove all files from htdocs
     if (Test-Path $WpDestDir) {
-        Write-Host "  Removing $WpDestDir ..." -ForegroundColor White
-        Remove-Item $WpDestDir -Recurse -Force
-        Write-Host "  WordPress files removed." -ForegroundColor Green
+        Write-Host "  Removing all files from $WpDestDir ..." -ForegroundColor White
+        Get-ChildItem -Path $WpDestDir -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  htdocs cleared." -ForegroundColor Green
     } else {
-        Write-Host "  WordPress directory not found, skipping." -ForegroundColor DarkGray
+        Write-Host "  htdocs directory not found, skipping." -ForegroundColor DarkGray
     }
     
     # Remove working database directory
@@ -236,21 +236,24 @@ $dbFileSize = (Get-Item $BackupDbFile).Length / 1MB
 Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)" -ForegroundColor Green
 
 # ─────────────────────────────────────────────
-# Step 2: Copy WordPress files to htdocs
+# Step 2: Copy WordPress files to htdocs root
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/9] Copying WordPress files to XAMPP htdocs..." -ForegroundColor Yellow
+Write-Host "[2/9] Copying WordPress files to XAMPP htdocs root..." -ForegroundColor Yellow
 
-$WpDestDir = Join-Path $HtdocsPath "wordpress"
+$WpDestDir = $HtdocsPath
 
-if (Test-Path $WpDestDir) {
-    Write-Host "  $WpDestDir already exists, skipping copy." -ForegroundColor DarkYellow
+# Check if WordPress is already deployed (look for wp-config.php)
+$wpConfigCheck = Join-Path $WpDestDir "wp-config.php"
+if (Test-Path $wpConfigCheck) {
+    Write-Host "  WordPress already deployed to $WpDestDir, skipping copy." -ForegroundColor DarkYellow
 } else {
     Write-Host "  Copying Backup/wordpress/ -> $WpDestDir ..." -ForegroundColor White
     Write-Host "  (This may take a while for large uploads)" -ForegroundColor DarkGray
 
     # Use robocopy for better performance with large directory trees
-    $robocopyArgs = @($BackupWpDir, $WpDestDir, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/MT:8")
+    # Copy contents of wordpress folder to htdocs root using /E and wildcard file spec
+    $robocopyArgs = @($BackupWpDir, $WpDestDir, "*.*", "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/MT:8")
     & robocopy @robocopyArgs | Out-Null
 
     # Robocopy exit codes: 0-7 are success, 8+ are errors
@@ -259,7 +262,7 @@ if (Test-Path $WpDestDir) {
         exit 1
     }
 
-    Write-Host "  WordPress files copied." -ForegroundColor Green
+    Write-Host "  WordPress files copied to htdocs root." -ForegroundColor Green
 }
 
 # ─────────────────────────────────────────────
@@ -543,7 +546,7 @@ Write-Host ""
 Write-Host "[7/9] Replacing production URLs with localhost..." -ForegroundColor Yellow
 
 $productionUrl = "https://waikatotainui.com"
-$localUrl = "http://localhost/wordpress"
+$localUrl = "http://localhost"
 
 # Check if WP-CLI is installed
 $wpCliPath = Join-Path $env:USERPROFILE ".wp-cli\wp-cli.phar"
@@ -637,7 +640,7 @@ if ($GfWebhookRedirectHost) {
 Write-Host ""
 Write-Host "=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  WordPress:  http://localhost/wordpress" -ForegroundColor White
+Write-Host "  WordPress:  http://localhost" -ForegroundColor White
 Write-Host "  phpMyAdmin: http://localhost/phpmyadmin" -ForegroundColor White
 Write-Host ""
 Write-Host "  DB Name:     $DbName" -ForegroundColor DarkGray
@@ -651,8 +654,6 @@ Write-Host "    Start XAMPP:  $XamppPath\xampp-control.exe" -ForegroundColor Dar
 Write-Host "    WP-CLI:       php $wpCliPath --path=`"$WpDestDir`" <command>" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  To reset:" -ForegroundColor DarkGray
-Write-Host "    1. Remove-Item `"$WpDestDir`" -Recurse" -ForegroundColor DarkGray
-Write-Host "    2. mysql -uroot -e `"DROP DATABASE $DbName;`"" -ForegroundColor DarkGray
-Write-Host "    3. Remove-Item `"$WorkingDbDir`" -Recurse" -ForegroundColor DarkGray
-Write-Host "    4. Run this script again" -ForegroundColor DarkGray
+Write-Host "    1. .\setup-native.ps1 -Force" -ForegroundColor DarkGray
+Write-Host "       (or manually: mysql -uroot -e `"DROP DATABASE $DbName;`")" -ForegroundColor DarkGray
 Write-Host ""
