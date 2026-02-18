@@ -44,7 +44,7 @@ $LocalDomain = "wordpress.test"
 
 # Auto-detect PHP and MySQL paths
 $PhpDir = Get-ChildItem (Join-Path $LaragonRoot "bin\php") | Select-Object -First 1 -ExpandProperty FullName
-$MysqlDir = Get-ChildItem (Join-Path $LaragonRoot "bin\mysql") | Select-Object -First 1 -ExpandProperty FullName
+$MysqlDir = Get-ChildItem (Join-Path $LaragonRoot "bin\mysql\") | Select-Object -First 1 -ExpandProperty FullName
 $PhpExe = Join-Path $PhpDir "php.exe"
 $MysqlExe = Join-Path $MysqlDir "bin\mysql.exe"
 
@@ -111,7 +111,7 @@ if ($Force) {
     # Drop the database
     Write-Host "  Dropping database '$DbName'..." -ForegroundColor White
     $dropDbSql = "DROP DATABASE IF EXISTS ``$DbName``;"
-    & $MysqlExe -uroot -e $dropDbSql 2>&1 | Out-Null
+    & $MysqlExe -uroot -p"$DbRootPassword" -e $dropDbSql 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  Database dropped." -ForegroundColor Green
     } else {
@@ -121,7 +121,7 @@ if ($Force) {
     # Also drop the user to ensure clean state
     Write-Host "  Dropping user '$DbUser'..." -ForegroundColor White
     $dropUserSql = "DROP USER IF EXISTS '$DbUser'@'localhost';"
-    & $MysqlExe -uroot -e $dropUserSql 2>&1 | Out-Null
+    & $MysqlExe -uroot -p"$DbRootPassword" -e $dropUserSql 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  User dropped." -ForegroundColor Green
     } else {
@@ -168,7 +168,7 @@ if (-not (Test-Path $WpDir)) {
 
 # Check MySQL connectivity
 try {
-    & $MysqlExe -uroot -e "SELECT 1;" 2>&1 | Out-Null
+    & $MysqlExe -uroot -p"$DbRootPassword" -e "SELECT 1;" 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  MySQL: OK (connection successful)" -ForegroundColor Green
     } else {
@@ -443,7 +443,7 @@ Write-Host "[5/9] Creating database and user..." -ForegroundColor Yellow
 
 # Create database
 $createDbSql = "CREATE DATABASE IF NOT EXISTS ``$DbName`` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-$result = & $MysqlExe -uroot -e $createDbSql 2>&1
+$result = & $MysqlExe -uroot -p"$DbRootPassword" -e $createDbSql 2>&1
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  Error: $result" -ForegroundColor Red
     exit 1
@@ -457,13 +457,13 @@ GRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'localhost';
 FLUSH PRIVILEGES;
 "@
 
-$result = & $MysqlExe -uroot -e $createUserSql 2>&1
+$result = & $MysqlExe -uroot -p"$DbRootPassword" -e $createUserSql 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  User '$DbUser' created with privileges on '$DbName'." -ForegroundColor Green
 } else {
     # User might already exist, try just granting privileges
     $grantSql = "GRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'localhost'; FLUSH PRIVILEGES;"
-    & $MysqlExe -uroot -e $grantSql 2>&1 | Out-Null
+    & $MysqlExe -uroot -p"$DbRootPassword" -e $grantSql 2>&1 | Out-Null
     Write-Host "  User '$DbUser' privileges updated." -ForegroundColor Green
 }
 
@@ -476,7 +476,9 @@ Write-Host "  Importing $([math]::Round($dbFileSize, 0)) MB SQL dump. This may t
 
 # Check if database already has tables (skip import if so)
 $checkTablesSql = "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$DbName';"
-$tableCount = & $MysqlExe -uroot -N -e $checkTablesSql 2>&1
+$tableCountRaw = & $MysqlExe -uroot -p"$DbRootPassword" -N -e $checkTablesSql 2>&1
+# Extract the numeric result (2>&1 may produce an array mixing stderr and stdout)
+$tableCount = ($tableCountRaw | Select-Object -Last 1).ToString().Trim()
 
 if ($tableCount -match "^\d+$" -and [int]$tableCount -gt 0) {
     Write-Host "  Database already has $tableCount tables, skipping import." -ForegroundColor DarkYellow
@@ -485,7 +487,7 @@ if ($tableCount -match "^\d+$" -and [int]$tableCount -gt 0) {
     $startTime = Get-Date
     
     # Import the SQL file
-    & $MysqlExe -uroot $DbName -e "source $ImportSqlPath" 2>&1 | ForEach-Object {
+    & $MysqlExe -uroot -p"$DbRootPassword" $DbName -e "source $ImportSqlPath" 2>&1 | ForEach-Object {
         if ($_ -match "ERROR") {
             Write-Host "  $_" -ForegroundColor Red
         }
@@ -617,5 +619,5 @@ Write-Host "    Laragon:      Start via Laragon Control Panel" -ForegroundColor 
 Write-Host ""
 Write-Host "  To reset:" -ForegroundColor DarkGray
 Write-Host "    1. .\setup-native.ps1 -Force" -ForegroundColor DarkGray
-Write-Host "       (or manually: $MysqlExe -uroot -e `"DROP DATABASE $DbName;`")" -ForegroundColor DarkGray
+Write-Host "       (or manually: $MysqlExe -uroot -p`"$DbRootPassword`" -e `"DROP DATABASE $DbName;`")" -ForegroundColor DarkGray
 Write-Host ""
