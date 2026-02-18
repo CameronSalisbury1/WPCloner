@@ -87,7 +87,7 @@ Write-Host ""
 # Step 0: Force mode - wipe existing setup
 # ─────────────────────────────────────────────
 if ($Force) {
-    Write-Host "[0/9] Force mode: Wiping existing setup..." -ForegroundColor Red
+    Write-Host "[0/10] Force mode: Wiping existing setup..." -ForegroundColor Red
     
     # Remove all files from wordpress directory
     if (Test-Path $WpDir) {
@@ -134,7 +134,7 @@ if ($Force) {
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/9] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/10] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check if Laragon is installed
 if (-not (Test-Path $LaragonRoot)) {
@@ -209,7 +209,7 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 # Step 2: Copy WordPress files
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/9] Copying WordPress files..." -ForegroundColor Yellow
+Write-Host "[2/10] Copying WordPress files..." -ForegroundColor Yellow
 
 # Check if WordPress is already deployed (look for wp-config.php)
 $wpConfigCheck = Join-Path $WpDir "wp-config.php"
@@ -236,7 +236,7 @@ if (Test-Path $wpConfigCheck) {
 # Step 3: Prepare database import file
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/9] Preparing database import file..." -ForegroundColor Yellow
+Write-Host "[3/10] Preparing database import file..." -ForegroundColor Yellow
 
 $WorkingDbDir = Join-Path $WorkingDir "database"
 $ImportSqlPath = Join-Path $WorkingDbDir "import.sql"
@@ -269,7 +269,7 @@ if (Test-Path $ImportSqlPath) {
 # Step 4: Patch wp-config.php for local environment
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[4/9] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+Write-Host "[4/10] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
 $WpConfigPath = Join-Path $WpDir "wp-config.php"
 
@@ -436,10 +436,41 @@ if (-not $currentConfig.Contains('gravityflow_webhook_args')) {
 }
 
 # ─────────────────────────────────────────────
-# Step 5: Create database and user
+# Step 5: Patch Requests.php timeouts
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[5/9] Creating database and user..." -ForegroundColor Yellow
+Write-Host "[5/10] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
+
+$RequestsPhpPath = Join-Path $WpDir "wp-includes\Requests\src\Requests.php"
+if (-not (Test-Path $RequestsPhpPath)) {
+    Write-Host "  Requests.php not found at: $RequestsPhpPath, skipping." -ForegroundColor DarkYellow
+} else {
+    $requestsContent = Get-Content $RequestsPhpPath -Raw
+    $requestsChanged = @()
+
+    foreach ($key in @('timeout', 'connect_timeout')) {
+        $newContent = $requestsContent -replace "('$key'\s*=>\s*)\d+(\s*,)", '${1}120${2}'
+        if ($newContent -ne $requestsContent) {
+            $requestsContent = $newContent
+            $requestsChanged += "$key -> 120"
+        }
+    }
+
+    if ($requestsChanged.Count -gt 0) {
+        Set-Content -Path $RequestsPhpPath -Value $requestsContent -NoNewline
+        foreach ($change in $requestsChanged) {
+            Write-Host "  $change" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  No changes needed (already patched?)" -ForegroundColor DarkYellow
+    }
+}
+
+# ─────────────────────────────────────────────
+# Step 6: Create database and user
+# ─────────────────────────────────────────────
+Write-Host ""
+Write-Host "[6/10] Creating database and user..." -ForegroundColor Yellow
 
 # Create database
 $createDbSql = "CREATE DATABASE IF NOT EXISTS ``$DbName`` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
@@ -471,7 +502,7 @@ if ($LASTEXITCODE -eq 0) {
 # Step 6: Import database
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[6/9] Importing database..." -ForegroundColor Yellow
+Write-Host "[7/10] Importing database..." -ForegroundColor Yellow
 Write-Host "  Importing $([math]::Round($dbFileSize, 0)) MB SQL dump. This may take several minutes..." -ForegroundColor DarkGray
 
 # Check if database already has tables (skip import if so)
@@ -505,7 +536,7 @@ if ($tableCount -match "^\d+$" -and [int]$tableCount -gt 0) {
 # Step 7: Install WP-CLI and replace URLs
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[7/9] Replacing production URLs with $LocalDomain..." -ForegroundColor Yellow
+Write-Host "[8/10] Replacing production URLs with $LocalDomain..." -ForegroundColor Yellow
 
 $productionUrl = "https://waikatotainui.com"
 $localUrl = "http://$LocalDomain"
@@ -549,7 +580,7 @@ try {
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($DisableGfNotifications) {
-    Write-Host "[8/9] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+    Write-Host "[9/10] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
     
     $gfSql = "UPDATE wp_gf_form_meta SET notifications = REPLACE(notifications, '`"isActive`":true', '`"isActive`":false') WHERE notifications LIKE '%isActive%';"
     
@@ -565,7 +596,7 @@ if ($DisableGfNotifications) {
         Write-Host "  WARNING: Failed to disable Gravity Forms notifications." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "[8/9] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
+    Write-Host "[9/10] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
@@ -573,7 +604,7 @@ if ($DisableGfNotifications) {
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($GfWebhookRedirectHost) {
-    Write-Host "[9/9] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+    Write-Host "[10/10] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
     
     $webhookSql = "UPDATE wp_gf_addon_feed SET meta = REPLACE(meta, 'hook.us1.make.com', '$GfWebhookRedirectHost') WHERE meta LIKE '%hook.us1.make.com%';"
     
@@ -589,7 +620,7 @@ if ($GfWebhookRedirectHost) {
         Write-Host "  WARNING: Failed to redirect webhooks." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "[9/9] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
+    Write-Host "[10/10] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
