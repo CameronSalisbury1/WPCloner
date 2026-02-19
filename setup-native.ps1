@@ -284,74 +284,88 @@ $config = Get-Content $WpConfigPath -Raw
 $changes = @()
 
 # --- DB_NAME ---
-$original = "define('DB_NAME', 'ndshewxtpp');"
-$replacement = "define('DB_NAME', '$DbName'); // Patched for local: was 'ndshewxtpp'"
-if ($config.Contains($original)) {
-    $config = $config.Replace($original, $replacement)
-    $changes += "DB_NAME: ndshewxtpp -> $DbName"
+$newConfig = $config -replace "define\s*\(\s*'DB_NAME'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_NAME', '$DbName'); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "DB_NAME -> $DbName"
 }
 
 # --- DB_USER ---
-$original = "define('DB_USER', 'ndshewxtpp');"
-$replacement = "define('DB_USER', '$DbUser'); // Patched for local: was 'ndshewxtpp'"
-if ($config.Contains($original)) {
-    $config = $config.Replace($original, $replacement)
-    $changes += "DB_USER: ndshewxtpp -> $DbUser"
+$newConfig = $config -replace "define\s*\(\s*'DB_USER'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_USER', '$DbUser'); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "DB_USER -> $DbUser"
 }
 
 # --- DB_PASSWORD ---
-$original = "define('DB_PASSWORD', 'taT8QhbkZe');"
-$replacement = "define('DB_PASSWORD', '$DbPassword'); // Patched for local: was production password"
-if ($config.Contains($original)) {
-    $config = $config.Replace($original, $replacement)
-    $changes += "DB_PASSWORD: <redacted> -> $DbPassword"
+$newConfig = $config -replace "define\s*\(\s*'DB_PASSWORD'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_PASSWORD', '$DbPassword'); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "DB_PASSWORD -> <set>"
 }
 
-# --- DB_HOST: Make sure it's localhost ---
-$original = "define('DB_HOST', 'db');"
-$replacement = "define('DB_HOST', 'localhost'); // Patched for Laragon: was 'db' (Docker)"
-if ($config.Contains($original)) {
-    $config = $config.Replace($original, $replacement)
-    $changes += "DB_HOST: db -> localhost"
+# --- DB_HOST ---
+$newConfig = $config -replace "define\s*\(\s*'DB_HOST'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_HOST', 'localhost'); // Patched for Laragon: was 'db' (Docker)"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "DB_HOST -> localhost"
 }
 
-# --- FORCE_SSL_ADMIN: true -> false (no SSL locally) ---
-$original = "define('FORCE_SSL_ADMIN', true);"
-$replacement = "define('FORCE_SSL_ADMIN', false); // Patched for local: was true"
-if ($config.Contains($original)) {
-    $config = $config.Replace($original, $replacement)
-    $changes += "FORCE_SSL_ADMIN: true -> false"
+# --- FORCE_SSL_ADMIN: false ---
+$newConfig = $config -replace "define\s*\(\s*'FORCE_SSL_ADMIN'\s*,\s*(true|false)\s*\)\s*;", "define('FORCE_SSL_ADMIN', false); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "FORCE_SSL_ADMIN -> false"
 }
 
-# --- WP_CACHE: true -> false (no caching locally) ---
-$original = "define( 'WP_CACHE', true );"
-$replacement = "define( 'WP_CACHE', false ); // Patched for local: was true"
-if ($config.Contains($original)) {
-    $config = $config.Replace($original, $replacement)
-    $changes += "WP_CACHE: true -> false"
+# --- WP_CACHE: false ---
+$newConfig = $config -replace "define\s*\(\s*'WP_CACHE'\s*,\s*(true|false)\s*\)\s*;", "define('WP_CACHE', false); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "WP_CACHE -> false"
 }
 
-# --- WP_REDIS_DISABLED: false -> true ---
-$original = "define( 'WP_REDIS_DISABLED', false );"
-$replacement = "define( 'WP_REDIS_DISABLED', true ); // Patched for local: was false"
-if ($config.Contains($original)) {
-    $config = $config.Replace($original, $replacement)
-    $changes += "WP_REDIS_DISABLED: false -> true"
+# --- WP_REDIS_DISABLED: true ---
+$newConfig = $config -replace "define\s*\(\s*'WP_REDIS_DISABLED'\s*,\s*(true|false)\s*\)\s*;", "define('WP_REDIS_DISABLED', true); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "WP_REDIS_DISABLED -> true"
 }
 
 # --- DISALLOW_FILE_MODS: based on .env setting ---
 $newValue = $DisallowFileMods.ToString().ToLower()
-$originalTrue = "define('DISALLOW_FILE_MODS', true);"
-$originalFalse = "define('DISALLOW_FILE_MODS', false);"
-$replacement = "define('DISALLOW_FILE_MODS', $newValue);"
-
-if ($config.Contains($originalTrue)) {
-    $config = $config.Replace($originalTrue, $replacement)
-    $changes += "DISALLOW_FILE_MODS: true -> $newValue"
+$newConfig = $config -replace "define\s*\(\s*'DISALLOW_FILE_MODS'\s*,\s*(true|false)\s*\)\s*;", "define('DISALLOW_FILE_MODS', $newValue);"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "DISALLOW_FILE_MODS -> $newValue"
 }
-elseif ($config.Contains($originalFalse)) {
-    $config = $config.Replace($originalFalse, $replacement)
-    $changes += "DISALLOW_FILE_MODS: false -> $newValue"
+
+# --- WP_DEBUG: true ---
+$newConfig = $config -replace "define\s*\(\s*'WP_DEBUG'\s*,\s*(true|false)\s*\)\s*;", "define('WP_DEBUG', true); // Patched for local: debug enabled"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "WP_DEBUG -> true"
+}
+
+# --- WP_DEBUG_LOG: true ---
+$newConfig = $config -replace "define\s*\(\s*'WP_DEBUG_LOG'\s*,\s*(true|false)\s*\)\s*;", "define('WP_DEBUG_LOG', true); // Patched for local: debug log enabled"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "WP_DEBUG_LOG -> true"
+}
+
+# --- WP_MEMORY_LIMIT: 2048M ---
+$newConfig = $config -replace "define\s*\(\s*'WP_MEMORY_LIMIT'\s*,\s*'[^']*'\s*\)\s*;", "define('WP_MEMORY_LIMIT', '2048M'); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "WP_MEMORY_LIMIT -> 2048M"
+}
+
+# --- WP_MAX_MEMORY_LIMIT: 2048M ---
+$newConfig = $config -replace "define\s*\(\s*'WP_MAX_MEMORY_LIMIT'\s*,\s*'[^']*'\s*\)\s*;", "define('WP_MAX_MEMORY_LIMIT', '2048M'); // Patched for local"
+if ($newConfig -ne $config) {
+    $config = $newConfig
+    $changes += "WP_MAX_MEMORY_LIMIT -> 2048M"
 }
 
 # Write patched config
