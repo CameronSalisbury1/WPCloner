@@ -94,7 +94,8 @@ if ($Force) {
         Write-Host "  Removing all files from $WpDir ..." -ForegroundColor White
         Get-ChildItem -Path $WpDir -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
         Write-Host "  WordPress directory cleared." -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  WordPress directory not found, skipping." -ForegroundColor DarkGray
     }
     
@@ -104,7 +105,8 @@ if ($Force) {
         Write-Host "  Removing $WorkingDbDir ..." -ForegroundColor White
         Remove-Item $WorkingDbDir -Recurse -Force
         Write-Host "  Database working directory removed." -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  Database directory not found, skipping." -ForegroundColor DarkGray
     }
     
@@ -114,7 +116,8 @@ if ($Force) {
     & $MysqlExe -uroot -p"$DbRootPassword" -e $dropDbSql 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  Database dropped." -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  Could not drop database (may not exist)." -ForegroundColor DarkYellow
     }
     
@@ -124,7 +127,8 @@ if ($Force) {
     & $MysqlExe -uroot -p"$DbRootPassword" -e $dropUserSql 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  User dropped." -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  Could not drop user (may not exist)." -ForegroundColor DarkYellow
     }
     
@@ -171,11 +175,13 @@ try {
     & $MysqlExe -uroot -p"$DbRootPassword" -e "SELECT 1;" 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  MySQL: OK (connection successful)" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Error "MySQL connection failed. Please ensure Laragon services are running."
         exit 1
     }
-} catch {
+}
+catch {
     Write-Error "MySQL not accessible. Please start Laragon and ensure MySQL service is running."
     exit 1
 }
@@ -215,7 +221,8 @@ Write-Host "[2/10] Copying WordPress files..." -ForegroundColor Yellow
 $wpConfigCheck = Join-Path $WpDir "wp-config.php"
 if (Test-Path $wpConfigCheck) {
     Write-Host "  WordPress already deployed to $WpDir, skipping copy." -ForegroundColor DarkYellow
-} else {
+}
+else {
     Write-Host "  Copying Backup/wordpress/ -> $WpDir ..." -ForegroundColor White
     Write-Host "  (This may take a while for large uploads)" -ForegroundColor DarkGray
 
@@ -243,7 +250,8 @@ $ImportSqlPath = Join-Path $WorkingDbDir "import.sql"
 
 if (Test-Path $ImportSqlPath) {
     Write-Host "  database/import.sql already exists, skipping preparation." -ForegroundColor DarkYellow
-} else {
+}
+else {
     Write-Host "  Creating database/import.sql with USE statement..." -ForegroundColor White
     
     New-Item -ItemType Directory -Path $WorkingDbDir -Force | Out-Null
@@ -257,7 +265,8 @@ if (Test-Path $ImportSqlPath) {
     $destStream = [System.IO.File]::Open($ImportSqlPath, [System.IO.FileMode]::Append)
     try {
         $sourceStream.CopyTo($destStream)
-    } finally {
+    }
+    finally {
         $sourceStream.Close()
         $destStream.Close()
     }
@@ -458,7 +467,8 @@ Write-Host "[5/10] Patching wp-includes/Requests/src/Requests.php timeouts to 12
 $RequestsPhpPath = Join-Path $WpDir "wp-includes\Requests\src\Requests.php"
 if (-not (Test-Path $RequestsPhpPath)) {
     Write-Host "  Requests.php not found at: $RequestsPhpPath, skipping." -ForegroundColor DarkYellow
-} else {
+}
+else {
     $requestsContent = Get-Content $RequestsPhpPath -Raw
     $requestsChanged = @()
 
@@ -475,7 +485,8 @@ if (-not (Test-Path $RequestsPhpPath)) {
         foreach ($change in $requestsChanged) {
             Write-Host "  $change" -ForegroundColor Green
         }
-    } else {
+    }
+    else {
         Write-Host "  No changes needed (already patched?)" -ForegroundColor DarkYellow
     }
 }
@@ -505,7 +516,8 @@ FLUSH PRIVILEGES;
 $result = & $MysqlExe -uroot -p"$DbRootPassword" -e $createUserSql 2>&1
 if ($LASTEXITCODE -eq 0) {
     Write-Host "  User '$DbUser' created with privileges on '$DbName'." -ForegroundColor Green
-} else {
+}
+else {
     # User might already exist, try just granting privileges
     $grantSql = "GRANT ALL PRIVILEGES ON ``$DbName``.* TO '$DbUser'@'localhost'; FLUSH PRIVILEGES;"
     & $MysqlExe -uroot -p"$DbRootPassword" -e $grantSql 2>&1 | Out-Null
@@ -528,7 +540,8 @@ $tableCount = ($tableCountRaw | Select-Object -Last 1).ToString().Trim()
 if ($tableCount -match "^\d+$" -and [int]$tableCount -gt 0) {
     Write-Host "  Database already has $tableCount tables, skipping import." -ForegroundColor DarkYellow
     Write-Host "  To re-import, use: .\setup-native.ps1 -Force" -ForegroundColor DarkGray
-} else {
+}
+else {
     $startTime = Get-Date
     
     # Import the SQL file
@@ -541,7 +554,8 @@ if ($tableCount -match "^\d+$" -and [int]$tableCount -gt 0) {
     if ($LASTEXITCODE -eq 0) {
         $duration = (Get-Date) - $startTime
         Write-Host "  Database imported successfully in $([math]::Round($duration.TotalMinutes, 1)) minutes." -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  WARNING: Database import may have encountered errors." -ForegroundColor Yellow
     }
 }
@@ -582,10 +596,12 @@ try {
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  URL replacement complete." -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  WARNING: URL replacement may have failed. Check output above." -ForegroundColor Yellow
     }
-} finally {
+}
+finally {
     Pop-Location
 }
 
@@ -606,10 +622,12 @@ if ($DisableGfNotifications) {
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  Gravity Forms notifications disabled." -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  WARNING: Failed to disable Gravity Forms notifications." -ForegroundColor Yellow
     }
-} else {
+}
+else {
     Write-Host "[9/10] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
 }
 
@@ -630,10 +648,12 @@ if ($GfWebhookRedirectHost) {
     
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  Webhooks redirected: hook.us1.make.com -> $GfWebhookRedirectHost" -ForegroundColor Green
-    } else {
+    }
+    else {
         Write-Host "  WARNING: Failed to redirect webhooks." -ForegroundColor Yellow
     }
-} else {
+}
+else {
     Write-Host "[10/10] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
 }
 

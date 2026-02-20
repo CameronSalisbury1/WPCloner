@@ -1,6 +1,6 @@
 services:
   db:
-    image: mariadb:10.11
+    image: mysql:8.0
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
@@ -12,16 +12,14 @@ services:
       - ../database:/docker-entrypoint-initdb.d
     ports:
       - "3306:3306"
-    # Give MariaDB more time/resources for the large SQL import
+    # Give MySQL more time/resources for the large SQL import
     command: >
       --max_allowed_packet=256M
       --innodb_buffer_pool_size=512M
-      --innodb_log_file_size=256M
       --innodb_flush_log_at_trx_commit=2
-      --innodb_flush_method=O_DIRECT
 
   wordpress:
-    image: wordpress:6.8.3-php8.2-apache
+    image: wordpress:6.9.1-php8.2-apache
     restart: unless-stopped
     depends_on:
       db:
