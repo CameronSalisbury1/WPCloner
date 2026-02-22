@@ -25,7 +25,7 @@ services:
       db:
         condition: service_started
     ports:
-      - "${WORDPRESS_PORT:-8080}:80"
+      - "${WORDPRESS_PORT:-80}:80"
     environment:
       # These are used by the WordPress Docker entrypoint only if wp-config.php
       # doesn't already exist. Since we provide our own patched wp-config.php,
@@ -35,7 +35,10 @@ services:
       WORDPRESS_DB_USER: ${DB_USER}
       WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
     volumes:
-      - ../wordpress:/var/www/html
+      # PHP files live in a named Docker volume for native Linux filesystem speed.
+      # Only uploads is bind-mounted from Windows so files remain accessible on the host.
+      - wp_data:/var/www/html
+      - ../uploads:/var/www/html/wp-content/uploads
 
   phpmyadmin:
     image: phpmyadmin:latest
@@ -52,3 +55,4 @@ services:
 
 volumes:
   db_data:
+  wp_data:

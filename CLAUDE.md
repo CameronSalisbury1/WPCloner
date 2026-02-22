@@ -4,11 +4,10 @@ This repository contains PowerShell scripts for setting up a local WordPress dev
 
 ## Repository Overview
 
-**Purpose**: Deploy production WordPress backups locally using either Docker (legacy) or Laragon (native Windows).
+**Purpose**: Deploy production WordPress backups locally using Docker.
 
 **Key Scripts**:
-- `setup-native.ps1` - **Primary script**: Native Windows setup using Laragon (replaces Docker version)
-- `setup.ps1` - Legacy Docker-based setup (deprecated)
+- `setup-docker.ps1` - **Primary script**: Docker-based setup using MySQL 8.0 + WordPress + phpMyAdmin
 - `backup.ps1` - Download WordPress files from production SFTP server using WinSCP
 
 **Environment**: Windows-only PowerShell 5.1+ required
@@ -18,12 +17,9 @@ This repository contains PowerShell scripts for setting up a local WordPress dev
 ### Running Scripts
 
 ```powershell
-# Primary setup (native Laragon)
-.\setup-native.ps1
-.\setup-native.ps1 -Force  # Wipe existing setup and start fresh
-
-# Legacy Docker setup (deprecated)
-.\setup.ps1
+# Primary setup (Docker)
+.\setup-docker.ps1
+.\setup-docker.ps1 -Force  # Wipe existing setup and start fresh
 
 # Backup from production
 .\backup.ps1              # Sync with deletions (mirror mode)
@@ -40,14 +36,14 @@ DB_NAME=wordpress
 DB_USER=wordpress
 DB_PASSWORD=wordpress
 DB_ROOT_PASSWORD=rootpassword
-WORDPRESS_PORT=8080
+WORDPRESS_PORT=80
 PHPMYADMIN_PORT=8081
 DISABLE_GF_NOTIFICATIONS=true
 GF_WEBHOOK_REDIRECT_HOST=api-uat.waikatotainui.com
 DISALLOW_FILE_MODS=false
 ```
 
-### Docker Commands (Legacy)
+### Docker Commands
 
 ```bash
 docker compose up -d                    # Start containers
@@ -57,41 +53,19 @@ docker compose logs -f db              # Watch DB import progress
 docker compose logs -f wordpress       # Watch WordPress logs
 ```
 
-### Laragon Commands (Native)
-
-```bash
-# Start/stop services via Laragon Control Panel
-C:\laragon\laragon.exe
-
-# WP-CLI usage (Laragon auto-detects PHP version)
-C:\laragon\bin\php\php-8.3.30-Win32-vs16-x64\php.exe %USERPROFILE%\.wp-cli\wp-cli.phar --path="C:\laragon\www\wordpress" <command>
-
-# Direct MySQL access
-C:\laragon\bin\mysql\mysql-8.4.3-winx64\bin\mysql.exe -uroot -e "USE wordpress; SELECT * FROM wp_users;"
-
-# Laragon virtual hosts (auto-created for folders in www/)
-# Folder: C:\laragon\www\wordpress → URL: http://wordpress.test
-```
-
 ### Testing Individual Components
 
 **Test database connectivity**:
 ```powershell
-# Native Laragon
-C:\laragon\bin\mysql\mysql-8.4.3-winx64\bin\mysql.exe -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
-
-# Docker
-docker compose exec -T db mariadb -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
+docker compose exec -T db mysql -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
 ```
 
 **Test WordPress availability**:
-- Native: `http://wordpress.test` (via Laragon auto virtual host)
-- Fallback: `http://localhost/wordpress`
-- Docker: `http://localhost:8080`
+- `http://localhost` (default, port 80)
+- `http://localhost:<WORDPRESS_PORT>` if non-default port
 
-**Test phpMyAdmin/Database tools**:
-- Native: Use HeidiSQL (bundled with Laragon) or `http://localhost/phpmyadmin` if configured
-- Docker: `http://localhost:8081`
+**Test phpMyAdmin**:
+- `http://localhost:8081`
 
 ## Code Style Guidelines
 
@@ -108,7 +82,7 @@ docker compose exec -T db mariadb -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
 
 **Output formatting**:
 ```powershell
-Write-Host "[1/9] Step description..." -ForegroundColor Yellow      # Step headers
+Write-Host "[1/10] Step description..." -ForegroundColor Yellow      # Step headers
 Write-Host "  Detail message" -ForegroundColor White                # Details
 Write-Host "  Success message" -ForegroundColor Green               # Success
 Write-Host "  Warning message" -ForegroundColor DarkYellow          # Warnings
@@ -116,7 +90,7 @@ Write-Host "  Error message" -ForegroundColor Red                   # Errors
 Write-Host "  Info/debug message" -ForegroundColor DarkGray         # Debug info
 ```
 
-**Progress indicators**: Use step numbers (e.g., `[1/9]`, `[2/9]`) for multi-step operations
+**Progress indicators**: Use step numbers (e.g., `[1/10]`, `[2/10]`) for multi-step operations
 
 **Separators**: Use visual separators for readability:
 ```powershell
@@ -200,106 +174,107 @@ Based on repository history:
 ### WordPress Configuration Patching
 
 When modifying `wp-config.php`:
-1. Read entire file as raw string
-2. Track changes in an array
-3. Use exact string matching with `.Contains()` before `.Replace()`
-4. Add inline comments explaining changes
+1. Read entire file from `Backup/` as raw string (never modify `Backup/`)
+2. Apply patches in memory using regex replacements
+3. Write patched version to a temp file
+4. Inject into the container via `docker cp`
 5. Report all changes to user
-6. Handle both Docker and native configurations differently
 
-**Docker-specific patches**:
-- `DB_HOST`: `localhost` → `db`
-
-**Native-specific patches**:
-- `DB_HOST`: `db` → `localhost`
-
-**Common patches**:
+**Patches applied**:
+- `DB_HOST`: any value → `db` (Docker service name)
 - Database credentials from production → `.env` values
 - `FORCE_SSL_ADMIN`: `true` → `false`
 - `WP_CACHE`: `true` → `false`
 - `WP_REDIS_DISABLED`: `false` → `true`
+- `DISALLOW_FILE_MODS`: set from `.env` value
+- `WP_DEBUG`: any → `true`
+- `WP_DEBUG_LOG`: any → `true`
+- `WP_MEMORY_LIMIT`: any → `2048M`
+- `WP_MAX_MEMORY_LIMIT`: any → `2048M`
 - Remove `advanced-cache.php` and `object-cache.php` drop-ins
+- Append Gravity Flow webhook HMAC signing filter
 
 ### Database Operations
 
 **Import workflow**:
 1. Create `import.sql` with `USE <database>;` statement prepended
-2. Import using either Docker exec or native MySQL client
-3. Wait for completion (Docker: poll with `SELECT 1;`, Native: synchronous)
-4. Verify table count before re-importing
+2. Import via MySQL `docker-entrypoint-initdb.d` auto-import (`.sql` extension required)
+3. Wait for completion: poll with `SELECT 1 FROM wp_options LIMIT 1;` via TCP (`-h 127.0.0.1`)
+   - TCP only becomes available after import finishes and MySQL restarts in normal mode
+4. Verify by checking `wp_options` table exists
 
 **URL replacement**:
-- Use WP-CLI `search-replace` command
+- Use WP-CLI `search-replace` command (installed inside the container if absent)
 - Production URL: `https://waikatotainui.com`
-- Local URL: `http://wordpress.test` (native) or `http://localhost:<PORT>` (Docker)
+- Local URL: `http://localhost` (or `http://localhost:<PORT>` if non-default)
 - Always use `--all-tables --report-changed-only` flags
+
+### Requests.php Timeout Patch
+
+Patch `wp-includes/Requests/src/Requests.php` to increase `timeout` and `connect_timeout` to 120s:
+- Read from `Backup/` (never modify `Backup/`)
+- Write patched version to temp file
+- Inject into container via `docker cp`
 
 ### Gravity Forms Configuration
 
 **Disable notifications** (optional, via `.env`):
 ```sql
-UPDATE wp_gf_form_meta 
-SET notifications = REPLACE(notifications, '"isActive":true', '"isActive":false') 
+UPDATE wp_gf_form_meta
+SET notifications = REPLACE(notifications, '"isActive":true', '"isActive":false')
 WHERE notifications LIKE '%isActive%';
 ```
 
 **Redirect webhooks** (optional, via `.env`):
 ```sql
-UPDATE wp_gf_addon_feed 
-SET meta = REPLACE(meta, 'hook.us1.make.com', '<GF_WEBHOOK_REDIRECT_HOST>') 
+UPDATE wp_gf_addon_feed
+SET meta = REPLACE(meta, 'hook.us1.make.com', '<GF_WEBHOOK_REDIRECT_HOST>')
 WHERE meta LIKE '%hook.us1.make.com%';
 ```
 
-**HMAC signing**: Automatically injected into `wp-config.php` via heredoc string
+**HMAC signing**: Automatically appended to `wp-config.php` via heredoc string
 
 ## Common Pitfalls
 
 1. **Robocopy exit codes**: Exit codes 0-7 are success, not just 0
 2. **MySQL passwords in output**: Filter out password warnings with regex
 3. **Large file operations**: Use streaming I/O, not `Get-Content`/`Set-Content`
-4. **Docker timing**: Database import can take 20+ minutes, implement proper waiting
+4. **Docker timing**: Database import can take 20+ minutes; poll via TCP (`-h 127.0.0.1`) not socket
 5. **Path separators**: Use `Join-Path`, not manual concatenation with `\`
 6. **Script location**: Calculate `$WorkingDir` relative to script, not CWD
+7. **DB polling method**: Use `-h 127.0.0.1` to force TCP — MySQL runs with `--skip-networking` during import so socket connections will be refused until the import completes
 
 ## File Structure
 
 ```
 wp-setup/
 ├── .env                      # Environment config (gitignored)
-├── .gitignore               # Excludes Backup/, wordpress/, database/, credentials
+├── .gitignore               # Excludes Backup/, uploads/, database/, credentials
 ├── backup.ps1               # SFTP download script
 ├── backup-config.json       # SFTP credentials (gitignored)
 ├── backup.log               # WinSCP transfer log (gitignored)
-├── docker-compose.yml       # Docker services definition
-├── setup.ps1                # Legacy Docker setup
-├── setup-native.ps1         # Primary Laragon setup
-└── AGENTS.md               # This file
+├── docker-compose.yml       # Docker services definition (MySQL 8.0 + WordPress + phpMyAdmin)
+├── setup-docker.ps1         # Primary Docker setup script
+└── CLAUDE.md                # This file
 
 Working directories (created by scripts, gitignored):
 ├── Backup/                  # Production files downloaded by backup.ps1
 │   ├── wordpress/          # Production WordPress files
 │   └── database/           # Production database dump
-└── database/               # Database with USE statement (working copy)
-
-Laragon directories (external to this repo):
-├── C:\laragon\www\wordpress  # WordPress files deployed by setup-native.ps1
-└── C:\laragon\data\mysql     # MySQL database files
+├── uploads/                 # wp-content/uploads bind-mounted into Docker
+└── database/               # Database with USE statement (working copy, auto-imported)
 ```
 
 ## External Dependencies
 
-- **Laragon**: Full-featured local development environment with Apache, PHP 8.3, MySQL 8.4 (for native setup)
-  - Download from: https://laragon.org
-  - Features: Auto virtual hosts, HeidiSQL, built-in tools
-- **Docker Desktop**: Required for legacy setup (deprecated)
+- **Docker Desktop**: Required for running MySQL, WordPress, and phpMyAdmin containers
 - **WinSCP**: SFTP client for backup.ps1 (auto-installs via winget)
-- **WP-CLI**: WordPress command-line tool (auto-downloads to `~/.wp-cli/`)
+- **WP-CLI**: WordPress command-line tool (auto-downloads inside container if absent)
 
 ## Additional Notes
 
-- The `setup-native.ps1` script is the current recommended approach
-- `setup.ps1` (Docker) is maintained for compatibility but not actively developed
 - Scripts are idempotent: can be run multiple times safely
-- Use `-Force` flag on `setup-native.ps1` to reset completely
+- Use `-Force` flag on `setup-docker.ps1` to wipe uploads/, database/, and Docker volumes and start fresh
 - All scripts assume Windows environment with PowerShell 5.1+
 - Production server: `waikatotainui.com` (Gravity Flow WordPress site)
+- `Backup/` is read-only: scripts read from it but never modify it; all patches go to temp files and are injected via `docker cp`

@@ -5,17 +5,24 @@
 
 .DESCRIPTION
     This script:
-    1. Copies backup files to working directories (never modifies the Backup/ folder)
-    2. Patches wp-config.php for the local Docker environment
-    3. Starts Docker containers (MySQL, WordPress, phpMyAdmin)
-    4. Waits for the database import to complete
-    5. Patches Requests.php timeouts
-    6. Replaces production URLs with localhost
-    7. Disables Gravity Forms notifications (optional)
-    8. Redirects webhooks (optional)
+    1. Copies wp-content/uploads from Backup/ to uploads/ (the bind-mount source)
+    2. Prepares the database import file from Backup/
+    3. Patches wp-config.php in memory (read from Backup/, never modifies Backup/)
+    4. Starts Docker containers (MySQL, WordPress, phpMyAdmin)
+    5. Copies WordPress files from Backup/ directly into the Docker named volume,
+       skipping uploads (bind-mounted) and injecting the patched wp-config.php
+    6. Waits for the database import to complete
+    7. Patches Requests.php timeouts inside the container
+    8. Replaces production URLs with localhost
+    9. Disables Gravity Forms notifications (optional)
+    10. Redirects webhooks (optional)
+
+    PHP files are served from a named Docker volume (native Linux filesystem speed).
+    Only wp-content/uploads is bind-mounted from the Windows host so uploaded media
+    remains directly accessible on disk. Backup/ is never modified.
 
 .PARAMETER Force
-    Wipes existing WordPress files, database directory and Docker DB volume, then recopies everything from Backup/
+    Wipes uploads/, database/, and Docker volumes, then recopies everything from Backup/
 
 .EXAMPLE
     .\setup-docker.ps1
@@ -73,33 +80,33 @@ Write-Host ""
 # Step 0: Force mode - wipe existing setup
 # ─────────────────────────────────────────────
 if ($Force) {
-    Write-Host "[0/9] Force mode: Wiping existing setup..." -ForegroundColor Red
+    Write-Host "[0/10] Force mode: Wiping existing setup..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
-        Write-Host "  Stopping containers and removing DB volume..." -ForegroundColor White
+        Write-Host "  Stopping containers and removing volumes..." -ForegroundColor White
         docker compose down -v 2>&1 | Out-Null
-        Write-Host "  Containers stopped and DB volume removed." -ForegroundColor Green
+        Write-Host "  Containers stopped and volumes removed." -ForegroundColor Green
     }
     finally {
         Pop-Location
     }
 
-    $WorkingWpDirForce = Join-Path $WorkingDir "wordpress"
-    if (Test-Path $WorkingWpDirForce) {
-        Write-Host "  Removing wordpress/ ..." -ForegroundColor White
-        Remove-Item $WorkingWpDirForce -Recurse -Force
-        Write-Host "  WordPress directory removed." -ForegroundColor Green
+    $UploadsDir = Join-Path $WorkingDir "uploads"
+    if (Test-Path $UploadsDir) {
+        Write-Host "  Removing uploads/ ..." -ForegroundColor White
+        Remove-Item $UploadsDir -Recurse -Force
+        Write-Host "  uploads/ removed." -ForegroundColor Green
     }
     else {
-        Write-Host "  wordpress/ not found, skipping." -ForegroundColor DarkGray
+        Write-Host "  uploads/ not found, skipping." -ForegroundColor DarkGray
     }
 
     $WorkingDbDirForce = Join-Path $WorkingDir "database"
     if (Test-Path $WorkingDbDirForce) {
         Write-Host "  Removing database/ ..." -ForegroundColor White
         Remove-Item $WorkingDbDirForce -Recurse -Force
-        Write-Host "  Database directory removed." -ForegroundColor Green
+        Write-Host "  database/ removed." -ForegroundColor Green
     }
     else {
         Write-Host "  database/ not found, skipping." -ForegroundColor DarkGray
@@ -111,7 +118,7 @@ if ($Force) {
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/9] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/10] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check Docker
 try {
@@ -144,36 +151,37 @@ $dbFileSize = (Get-Item $BackupDbFile).Length / 1MB
 Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)" -ForegroundColor Green
 
 # ─────────────────────────────────────────────
-# Step 2: Copy backup files
+# Step 2: Copy uploads and prepare database
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/9] Copying backup files..." -ForegroundColor Yellow
+Write-Host "[2/10] Copying uploads and preparing database..." -ForegroundColor Yellow
 
-$WorkingWpDir = Join-Path $WorkingDir "wordpress"
+$UploadsDir = Join-Path $WorkingDir "uploads"
 $WorkingDbDir = Join-Path $WorkingDir "database"
+$BackupUploadsDir = Join-Path $BackupWpDir "wp-content\uploads"
 
-# Handle WordPress directory
-if (Test-Path $WorkingWpDir) {
-    Write-Host "  wordpress/ already exists, skipping copy." -ForegroundColor DarkYellow
+# Copy uploads from Backup/ -> uploads/ (bind-mount source for the container)
+if (Test-Path $UploadsDir) {
+    Write-Host "  uploads/ already exists, skipping copy." -ForegroundColor DarkYellow
 }
 else {
-    Write-Host "  Copying Backup/wordpress/ -> wordpress/ ..." -ForegroundColor White
-    Write-Host "  (This may take a while for large uploads)" -ForegroundColor DarkGray
+    if (Test-Path $BackupUploadsDir) {
+        Write-Host "  Copying Backup/wordpress/wp-content/uploads/ -> uploads/ ..." -ForegroundColor White
+        Write-Host "  (This may take a while for large media libraries)" -ForegroundColor DarkGray
 
-    # Use robocopy for better performance with large directory trees
-    # /E = copy subdirectories including empty ones
-    # /NFL /NDL /NJH /NJS = suppress file/dir/header/summary logging (less noise)
-    # /MT:8 = multi-threaded copy with 8 threads
-    $robocopyArgs = @($BackupWpDir, $WorkingWpDir, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/MT:8")
-    & robocopy @robocopyArgs | Out-Null
+        $robocopyArgs = @($BackupUploadsDir, $UploadsDir, "/E", "/NFL", "/NDL", "/NJH", "/NJS", "/MT:8")
+        & robocopy @robocopyArgs | Out-Null
 
-    # Robocopy exit codes: 0-7 are success, 8+ are errors
-    if ($LASTEXITCODE -ge 8) {
-        Write-Error "robocopy failed with exit code $LASTEXITCODE"
-        exit 1
+        if ($LASTEXITCODE -ge 8) {
+            Write-Error "robocopy failed with exit code $LASTEXITCODE"
+            exit 1
+        }
+        Write-Host "  uploads/ copy complete." -ForegroundColor Green
     }
-
-    Write-Host "  wordpress/ copy complete." -ForegroundColor Green
+    else {
+        Write-Host "  No uploads found in Backup, creating empty uploads/ directory." -ForegroundColor DarkYellow
+        New-Item -ItemType Directory -Path $UploadsDir -Force | Out-Null
+    }
 }
 
 # Handle database directory
@@ -212,16 +220,19 @@ else {
 # Step 3: Patch wp-config.php for local Docker
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/9] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+Write-Host "[3/10] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
-$WpConfigPath = Join-Path $WorkingWpDir "wp-config.php"
+# Read from Backup/ - we never modify Backup/
+# The patched version is written to a temp file and docker cp'd into the container in Step 5.
+$BackupWpConfigPath = Join-Path $BackupWpDir "wp-config.php"
+$TempWpConfigPath = Join-Path $env:TEMP "wp-config-docker-patched.php"
 
-if (-not (Test-Path $WpConfigPath)) {
-    Write-Error "wp-config.php not found at: $WpConfigPath (was the copy successful?)"
+if (-not (Test-Path $BackupWpConfigPath)) {
+    Write-Error "wp-config.php not found at: $BackupWpConfigPath"
     exit 1
 }
 
-$config = Get-Content $WpConfigPath -Raw
+$config = Get-Content $BackupWpConfigPath -Raw
 
 # Track what we change
 $changes = @()
@@ -311,8 +322,8 @@ if ($newConfig -ne $config) {
     $changes += "WP_MAX_MEMORY_LIMIT -> 2048M"
 }
 
-# Write patched config
-Set-Content -Path $WpConfigPath -Value $config -NoNewline
+# Write patched config to temp file (docker cp'd into the container in Step 5)
+Set-Content -Path $TempWpConfigPath -Value $config -NoNewline
 
 foreach ($change in $changes) {
     Write-Host "  $change" -ForegroundColor Green
@@ -320,20 +331,6 @@ foreach ($change in $changes) {
 
 if ($changes.Count -eq 0) {
     Write-Host "  No changes needed (already patched?)" -ForegroundColor DarkYellow
-}
-
-# --- Remove caching drop-ins that reference production paths ---
-$filesToRemove = @(
-    (Join-Path $WorkingWpDir "wp-content\advanced-cache.php"),
-    (Join-Path $WorkingWpDir "wp-content\object-cache.php")
-)
-
-foreach ($file in $filesToRemove) {
-    if (Test-Path $file) {
-        Remove-Item $file -Force
-        $fileName = Split-Path $file -Leaf
-        Write-Host "  Removed wp-content/$fileName (production caching drop-in)" -ForegroundColor Green
-    }
 }
 
 # --- Add Gravity Flow webhook HMAC signing to wp-config.php ---
@@ -385,10 +382,10 @@ if ( function_exists( 'add_filter' ) ) {
 }
 '@
 
-# Re-read the config to check if HMAC code already exists
-$currentConfig = Get-Content $WpConfigPath -Raw
+# Append HMAC code to the temp file if not already present
+$currentConfig = Get-Content $TempWpConfigPath -Raw
 if (-not $currentConfig.Contains('gravityflow_webhook_args')) {
-    Add-Content -Path $WpConfigPath -Value $hmacCode
+    Add-Content -Path $TempWpConfigPath -Value $hmacCode
     Write-Host "  Added Gravity Flow webhook HMAC signing to wp-config.php" -ForegroundColor Green
 }
 
@@ -396,7 +393,7 @@ if (-not $currentConfig.Contains('gravityflow_webhook_args')) {
 # Step 4: Start Docker containers
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[4/9] Starting Docker containers..." -ForegroundColor Yellow
+Write-Host "[4/10] Starting Docker containers..." -ForegroundColor Yellow
 
 Push-Location $ScriptDir
 try {
@@ -412,10 +409,75 @@ finally {
 }
 
 # ─────────────────────────────────────────────
-# Step 5: Wait for database to be ready
+# Step 5: Copy WordPress files into Docker volume
+# ─────────────────────────────────────────────
+# PHP files are served from the named Docker volume (wp_data) which lives on the
+# Linux filesystem inside Docker - far faster than a Windows bind-mount.
+# Only wp-content/uploads remains as a bind-mount so media is accessible on the host.
+Write-Host ""
+Write-Host "[5/10] Copying WordPress files into Docker volume..." -ForegroundColor Yellow
+
+# Check if the volume already has WP files (idempotent re-runs)
+$wpIndexCheck = docker compose exec -T wordpress test -f /var/www/html/wp-config.php 2>&1
+$wpAlreadyCopied = ($LASTEXITCODE -eq 0)
+
+if ($wpAlreadyCopied) {
+    Write-Host "  WordPress files already present in Docker volume, skipping copy." -ForegroundColor DarkYellow
+}
+else {
+    Write-Host "  Copying Backup/wordpress/ directly into container..." -ForegroundColor White
+    Write-Host "  (This may take a minute)" -ForegroundColor DarkGray
+
+    $containerId = docker compose ps -q wordpress
+
+    # Copy everything at the root of Backup/wordpress/ except wp-content (handled separately)
+    Get-ChildItem -Path $BackupWpDir | Where-Object { $_.Name -ne "wp-content" } | ForEach-Object {
+        docker cp "$($_.FullName)" "${containerId}:/var/www/html/" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "docker cp failed for $($_.Name)"
+            exit 1
+        }
+    }
+
+    # Copy wp-content subdirectories individually, skipping uploads.
+    # uploads is bind-mounted from the host so it doesn't belong in the Docker volume.
+    docker compose exec -T wordpress mkdir -p /var/www/html/wp-content 2>&1 | Out-Null
+    Get-ChildItem -Path (Join-Path $BackupWpDir "wp-content") | Where-Object { $_.Name -ne "uploads" } | ForEach-Object {
+        docker cp "$($_.FullName)" "${containerId}:/var/www/html/wp-content/" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "docker cp failed for wp-content/$($_.Name)"
+            exit 1
+        }
+    }
+
+    # Inject the patched wp-config.php (Backup/ version was read-only; temp file has all patches)
+    docker cp $TempWpConfigPath "${containerId}:/var/www/html/wp-config.php" 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "docker cp failed for wp-config.php"
+        exit 1
+    }
+    Write-Host "  Injected patched wp-config.php." -ForegroundColor Green
+
+    # Remove production caching drop-ins that would break the local environment
+    foreach ($dropin in @("wp-content/advanced-cache.php", "wp-content/object-cache.php")) {
+        $dropinExists = docker compose exec -T wordpress test -f "/var/www/html/$dropin" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            docker compose exec -T wordpress rm -f "/var/www/html/$dropin" 2>&1 | Out-Null
+            Write-Host "  Removed $dropin (production caching drop-in)" -ForegroundColor Green
+        }
+    }
+
+    # Fix ownership so Apache/PHP can read the files
+    docker compose exec -T wordpress chown -R www-data:www-data /var/www/html 2>&1 | Out-Null
+
+    Write-Host "  WordPress files copied into Docker volume (uploads excluded - served via bind-mount)." -ForegroundColor Green
+}
+
+# ─────────────────────────────────────────────
+# Step 6: Wait for database to be ready
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[5/9] Waiting for database import to complete..." -ForegroundColor Yellow
+Write-Host "[6/10] Waiting for database import to complete..." -ForegroundColor Yellow
 Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
 Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
 Write-Host ""
@@ -456,12 +518,12 @@ if (-not $ready) {
 }
 
 # ─────────────────────────────────────────────
-# Step 6: Patch Requests.php timeouts
+# Step 7: Patch Requests.php timeouts
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[6/9] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
+Write-Host "[7/10] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
 
-$RequestsPhpPath = Join-Path $WorkingWpDir "wp-includes\Requests\src\Requests.php"
+$RequestsPhpPath = Join-Path $BackupWpDir "wp-includes\Requests\src\Requests.php"
 if (-not (Test-Path $RequestsPhpPath)) {
     Write-Host "  Requests.php not found at: $RequestsPhpPath, skipping." -ForegroundColor DarkYellow
 }
@@ -478,7 +540,11 @@ else {
     }
 
     if ($requestsChanged.Count -gt 0) {
-        Set-Content -Path $RequestsPhpPath -Value $requestsContent -NoNewline
+        # Write to a temp file (Backup/ is read-only) and docker cp into the container
+        $TempRequestsPath = Join-Path $env:TEMP "Requests-patched.php"
+        Set-Content -Path $TempRequestsPath -Value $requestsContent -NoNewline
+        $containerId = docker compose ps -q wordpress
+        docker cp $TempRequestsPath "${containerId}:/var/www/html/wp-includes/Requests/src/Requests.php" 2>&1 | Out-Null
         foreach ($change in $requestsChanged) {
             Write-Host "  $change" -ForegroundColor Green
         }
@@ -489,13 +555,13 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 7: Install WP-CLI and replace URLs
+# Step 8: Install WP-CLI and replace URLs
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[7/9] Replacing production URLs with localhost..." -ForegroundColor Yellow
+Write-Host "[8/10] Replacing production URLs with localhost..." -ForegroundColor Yellow
 
 $productionUrl = "https://waikatotainui.com"
-$localUrl = "http://localhost:$WpPort"
+$localUrl = if ($WpPort -eq "80") { "http://localhost" } else { "http://localhost:$WpPort" }
 
 # Install WP-CLI if not present, then run search-replace
 $wpCliScript = @"
@@ -519,11 +585,11 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 8: Disable Gravity Forms notifications
+# Step 9: Disable Gravity Forms notifications
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($DisableGfNotifications) {
-    Write-Host "[8/9] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+    Write-Host "[9/10] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
 
     # Use a here-string to avoid quote escaping issues
     $gfSql = @"
@@ -544,15 +610,15 @@ WHERE notifications LIKE '%isActive%';
     }
 }
 else {
-    Write-Host "[8/9] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
+    Write-Host "[9/10] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
-# Step 9: Redirect Make.com webhooks
+# Step 10: Redirect Make.com webhooks
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($GfWebhookRedirectHost) {
-    Write-Host "[9/9] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+    Write-Host "[10/10] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
 
     # Use a here-string to avoid quote escaping issues
     $webhookSql = @"
@@ -573,7 +639,7 @@ WHERE meta LIKE '%hook.us1.make.com%';
     }
 }
 else {
-    Write-Host "[9/9] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
+    Write-Host "[10/10] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
@@ -582,7 +648,8 @@ else {
 Write-Host ""
 Write-Host "=== Setup Complete ===" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  WordPress:  http://localhost:$WpPort" -ForegroundColor White
+$localDisplayUrl = if ($WpPort -eq "80") { "http://localhost" } else { "http://localhost:$WpPort" }
+Write-Host "  WordPress:  $localDisplayUrl" -ForegroundColor White
 Write-Host "  phpMyAdmin: http://localhost:$PmaPort" -ForegroundColor White
 Write-Host ""
 Write-Host "  DB Name:     $DbName" -ForegroundColor DarkGray
@@ -593,5 +660,5 @@ Write-Host "  Useful commands:" -ForegroundColor DarkGray
 Write-Host "    docker compose logs -f db          # Watch DB import progress" -ForegroundColor DarkGray
 Write-Host "    docker compose logs -f wordpress   # Watch WordPress logs" -ForegroundColor DarkGray
 Write-Host "    docker compose down                # Stop containers" -ForegroundColor DarkGray
-Write-Host "    docker compose down -v             # Stop and remove DB volume (full reset)" -ForegroundColor DarkGray
+Write-Host "    docker compose down -v             # Stop and remove all volumes (full reset)" -ForegroundColor DarkGray
 Write-Host ""
