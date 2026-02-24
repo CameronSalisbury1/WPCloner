@@ -682,16 +682,48 @@ Write-Host ""
 if ($DisableGfNotifications) {
     Write-Host "[9/10] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
 
-    # Use a here-string to avoid quote escaping issues
-    $gfSql = @"
-UPDATE wp_gf_form_meta
-SET notifications = REPLACE(notifications, '"isActive":true', '"isActive":false')
-WHERE notifications LIKE '%isActive%';
-"@
+    # Use WP-CLI + PHP to properly handle notifications that lack an isActive field
+    # (they default to active in GF but won't be caught by a simple string replace).
+    # Single-quoted heredoc so PowerShell doesn't expand $wpdb, $rows, etc.
+    $TempGfPhpPath = Join-Path $env:TEMP "gf-disable-notifications.php"
+    $gfPhpScript = @'
+<?php
+global $wpdb;
+$rows = $wpdb->get_results("SELECT form_id, notifications FROM {$wpdb->prefix}gf_form_meta WHERE notifications IS NOT NULL AND notifications != ''");
+$updated = 0;
+foreach ($rows as $row) {
+    $notifications = json_decode($row->notifications, true);
+    if (!is_array($notifications)) continue;
+    $changed = false;
+    foreach ($notifications as $id => &$notification) {
+        if (!array_key_exists('isActive', $notification) || $notification['isActive'] !== false) {
+            $notification['isActive'] = false;
+            $changed = true;
+        }
+    }
+    unset($notification);
+    if ($changed) {
+        $wpdb->update(
+            "{$wpdb->prefix}gf_form_meta",
+            ['notifications' => wp_json_encode($notifications)],
+            ['form_id' => $row->form_id]
+        );
+        $updated++;
+    }
+}
+echo "Updated $updated form(s)\n";
+'@
 
-    docker compose exec -T db mysql -u"$DbUser" -p"$DbPassword" "$DbName" -e $gfSql 2>&1 | ForEach-Object {
+    Set-Content -Path $TempGfPhpPath -Value $gfPhpScript -NoNewline
+
+    $containerId = docker compose ps -q wordpress
+    docker cp $TempGfPhpPath "${containerId}:/tmp/gf-disable-notifications.php" 2>&1 | Out-Null
+
+    docker compose exec -T wordpress wp --allow-root eval-file /tmp/gf-disable-notifications.php 2>&1 | ForEach-Object {
         Write-Host "  $_" -ForegroundColor DarkGray
     }
+
+    docker compose exec -T wordpress rm -f /tmp/gf-disable-notifications.php 2>&1 | Out-Null
 
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  Gravity Forms notifications disabled." -ForegroundColor Green
