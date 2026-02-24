@@ -558,6 +558,14 @@ else {
         }
     }
 
+    # Remove production environment monitor mu-plugin (phones home for unauthorized deployments)
+    $coreHooksPath = "wp-content/mu-plugins/core-hooks.php"
+    docker compose exec -T wordpress test -f "/var/www/html/$coreHooksPath" 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        docker compose exec -T wordpress rm -f "/var/www/html/$coreHooksPath" 2>&1 | Out-Null
+        Write-Host "  Removed $coreHooksPath (production environment monitor)" -ForegroundColor Green
+    }
+
     # Fix ownership so Apache/PHP can read the files
     docker compose exec -T wordpress chown -R www-data:www-data /var/www/html 2>&1 | Out-Null
 
