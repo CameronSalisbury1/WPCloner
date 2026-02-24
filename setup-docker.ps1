@@ -24,21 +24,46 @@
 .PARAMETER Force
     Wipes uploads/, database/, and Docker volumes, then recopies everything from Backup/
 
+.PARAMETER ForceDb
+    Wipes database/ and the db_data Docker volume, then re-imports the database from Backup/.
+    WordPress files in the wp_data volume are left intact.
+
+.PARAMETER ForceFiles
+    Wipes the wp_data Docker volume, then recopies WordPress files from Backup/.
+    Database is left intact.
+
 .EXAMPLE
     .\setup-docker.ps1
 
 .EXAMPLE
     .\setup-docker.ps1 -Force
     # Wipes everything and starts fresh from Backup/
+
+.EXAMPLE
+    .\setup-docker.ps1 -ForceDb
+    # Wipes and re-imports the database only (keeps WordPress files)
+
+.EXAMPLE
+    .\setup-docker.ps1 -ForceFiles
+    # Wipes and recopies WordPress files only (keeps database)
 #>
 
 param(
-    [switch]$Force
+    [switch]$Force,
+    [switch]$ForceDb,
+    [switch]$ForceFiles
 )
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkingDir = Split-Path -Parent $ScriptDir  # Parent directory (C:\repos\Tainui\WP)
+$ComposeProjName = (Split-Path $ScriptDir -Leaf).ToLower()
+
+# Validate mutually exclusive flags
+if (($Force -and $ForceDb) -or ($Force -and $ForceFiles) -or ($ForceDb -and $ForceFiles)) {
+    Write-Error "-Force, -ForceDb, and -ForceFiles are mutually exclusive. Specify only one."
+    exit 1
+}
 
 # ─────────────────────────────────────────────
 # Load .env file
@@ -72,7 +97,13 @@ $DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
 Write-Host ""
 Write-Host "=== WordPress Local Setup ===" -ForegroundColor Cyan
 if ($Force) {
-    Write-Host "    [FORCE MODE - Will wipe and recopy from Backup/]" -ForegroundColor Red
+    Write-Host "    [FORCE MODE - Will wipe and recopy everything from Backup/]" -ForegroundColor Red
+}
+elseif ($ForceDb) {
+    Write-Host "    [FORCE DB MODE - Will wipe and re-import database only]" -ForegroundColor Red
+}
+elseif ($ForceFiles) {
+    Write-Host "    [FORCE FILES MODE - Will wipe and recopy WordPress files only]" -ForegroundColor Red
 }
 Write-Host ""
 
@@ -110,6 +141,66 @@ if ($Force) {
     }
     else {
         Write-Host "  database/ not found, skipping." -ForegroundColor DarkGray
+    }
+
+    Write-Host ""
+}
+elseif ($ForceDb) {
+    Write-Host "[0/10] ForceDb: Wiping database for fresh import..." -ForegroundColor Red
+
+    Push-Location $ScriptDir
+    try {
+        Write-Host "  Stopping db container..." -ForegroundColor White
+        docker compose stop db 2>&1 | Out-Null
+        docker compose rm -f db 2>&1 | Out-Null
+        Write-Host "  db container stopped." -ForegroundColor Green
+
+        Write-Host "  Removing db_data volume..." -ForegroundColor White
+        docker volume rm "${ComposeProjName}_db_data" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  db_data volume removed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "  db_data volume not found, skipping." -ForegroundColor DarkGray
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    $WorkingDbDirForce = Join-Path $WorkingDir "database"
+    if (Test-Path $WorkingDbDirForce) {
+        Write-Host "  Removing database/ ..." -ForegroundColor White
+        Remove-Item $WorkingDbDirForce -Recurse -Force
+        Write-Host "  database/ removed." -ForegroundColor Green
+    }
+    else {
+        Write-Host "  database/ not found, skipping." -ForegroundColor DarkGray
+    }
+
+    Write-Host ""
+}
+elseif ($ForceFiles) {
+    Write-Host "[0/10] ForceFiles: Wiping WordPress files for fresh copy..." -ForegroundColor Red
+
+    Push-Location $ScriptDir
+    try {
+        Write-Host "  Stopping wordpress container..." -ForegroundColor White
+        docker compose stop wordpress 2>&1 | Out-Null
+        docker compose rm -f wordpress 2>&1 | Out-Null
+        Write-Host "  wordpress container stopped." -ForegroundColor Green
+
+        Write-Host "  Removing wp_data volume..." -ForegroundColor White
+        docker volume rm "${ComposeProjName}_wp_data" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  wp_data volume removed." -ForegroundColor Green
+        }
+        else {
+            Write-Host "  wp_data volume not found, skipping." -ForegroundColor DarkGray
+        }
+    }
+    finally {
+        Pop-Location
     }
 
     Write-Host ""
