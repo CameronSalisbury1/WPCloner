@@ -733,6 +733,14 @@ if (!`$user) { echo "User '$LocalAdminUser' not found\n"; exit(1); }
 echo `$deleted === false
     ? "No 2FA record found for $LocalAdminUser (already clear)\n"
     : "Removed Wordfence 2FA for $LocalAdminUser ({`$deleted} record(s))\n";
+
+// Delete the Wordfence Login Security enforcement settings so the "2FA required" policy
+// doesn't block login for users who have no 2FA configured (e.g. our local admin user).
+// Deleting this option resets WFLS to its default state (no role-based enforcement).
+if (get_option('wfls-settings') !== false) {
+    delete_option('wfls-settings');
+    echo "Cleared Wordfence Login Security enforcement settings (2FA requirement removed)\n";
+}
 "@
 
     Set-Content -Path $TempDisable2faPath -Value $disable2faScript -NoNewline
