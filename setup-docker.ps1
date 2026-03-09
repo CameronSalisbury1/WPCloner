@@ -673,7 +673,8 @@ if ! command -v wp &> /dev/null; then
     chmod +x wp-cli.phar
     mv wp-cli.phar /usr/local/bin/wp
 fi
-wp --allow-root search-replace '$productionUrl' '$localUrl' --all-tables --report-changed-only
+wp --allow-root search-replace '$productionUrl' '$localUrl' --all-tables --report-changed-only \
+  --skip-tables=wp_gf_entry,wp_gf_entry_meta,wp_gravitysmtp_events,wp_redirection_404,wp_redirection_logs,wp_stream_meta,wp_wfhits,wp_wfnotifications,wp_wpr_above_the_fold,wp_wpr_lazy_render_content,wp_wpr_rocket_cache,wp_wsal_metadata,wp_wsal_occurrences
 "@
 
 docker compose exec -T wordpress bash -c $wpCliScript 2>&1 | ForEach-Object {
