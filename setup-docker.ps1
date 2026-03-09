@@ -14,8 +14,9 @@
     6. Waits for the database import to complete
     7. Patches Requests.php timeouts inside the container
     8. Replaces production URLs with localhost
-    9. Disables Gravity Forms notifications (optional)
-    10. Redirects webhooks (optional)
+    9. Creates a local admin user and disables 2FA
+    10. Disables Gravity Forms notifications (optional)
+    11. Redirects webhooks (optional)
 
     PHP files are served from a named Docker volume (native Linux filesystem speed).
     Only wp-content/uploads is bind-mounted from the Windows host so uploaded media
@@ -93,6 +94,9 @@ $PmaPort = $EnvVars["PHPMYADMIN_PORT"]
 $DisableGfNotifications = $EnvVars["DISABLE_GF_NOTIFICATIONS"] -eq "true"
 $GfWebhookRedirectHost = $EnvVars["GF_WEBHOOK_REDIRECT_HOST"]
 $DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
+$LocalAdminUser = $EnvVars["LOCAL_ADMIN_USER"]
+$LocalAdminPassword = $EnvVars["LOCAL_ADMIN_PASSWORD"]
+$LocalAdminEmail = if ($EnvVars["LOCAL_ADMIN_EMAIL"]) { $EnvVars["LOCAL_ADMIN_EMAIL"] } else { "$LocalAdminUser@localhost.local" }
 
 Write-Host ""
 Write-Host "=== WordPress Local Setup ===" -ForegroundColor Cyan
@@ -111,7 +115,7 @@ Write-Host ""
 # Step 0: Force mode - wipe existing setup
 # ─────────────────────────────────────────────
 if ($Force) {
-    Write-Host "[0/10] Force mode: Wiping existing setup..." -ForegroundColor Red
+    Write-Host "[0/11] Force mode: Wiping existing setup..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -146,7 +150,7 @@ if ($Force) {
     Write-Host ""
 }
 elseif ($ForceDb) {
-    Write-Host "[0/10] ForceDb: Wiping database for fresh import..." -ForegroundColor Red
+    Write-Host "[0/11] ForceDb: Wiping database for fresh import..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -181,7 +185,7 @@ elseif ($ForceDb) {
     Write-Host ""
 }
 elseif ($ForceFiles) {
-    Write-Host "[0/10] ForceFiles: Wiping WordPress files for fresh copy..." -ForegroundColor Red
+    Write-Host "[0/11] ForceFiles: Wiping WordPress files for fresh copy..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -209,7 +213,7 @@ elseif ($ForceFiles) {
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/10] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/11] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check Docker
 try {
@@ -245,7 +249,7 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 # Step 2: Copy uploads and prepare database
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/10] Copying uploads and preparing database..." -ForegroundColor Yellow
+Write-Host "[2/11] Copying uploads and preparing database..." -ForegroundColor Yellow
 
 $UploadsDir = Join-Path $WorkingDir "uploads"
 $WorkingDbDir = Join-Path $WorkingDir "database"
@@ -311,7 +315,7 @@ else {
 # Step 3: Patch wp-config.php for local Docker
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/10] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+Write-Host "[3/11] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
 # Read from Backup/ - we never modify Backup/
 # The patched version is written to a temp file and docker cp'd into the container in Step 5.
@@ -484,7 +488,7 @@ if (-not $currentConfig.Contains('gravityflow_webhook_args')) {
 # Step 4: Start Docker containers
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[4/10] Starting Docker containers..." -ForegroundColor Yellow
+Write-Host "[4/11] Starting Docker containers..." -ForegroundColor Yellow
 
 Push-Location $ScriptDir
 try {
@@ -506,7 +510,7 @@ finally {
 # Linux filesystem inside Docker - far faster than a Windows bind-mount.
 # Only wp-content/uploads remains as a bind-mount so media is accessible on the host.
 Write-Host ""
-Write-Host "[5/10] Copying WordPress files into Docker volume..." -ForegroundColor Yellow
+Write-Host "[5/11] Copying WordPress files into Docker volume..." -ForegroundColor Yellow
 
 # Check if the volume already has WP files (idempotent re-runs)
 $wpIndexCheck = docker compose exec -T wordpress test -f /var/www/html/wp-config.php 2>&1
@@ -576,7 +580,7 @@ else {
 # Step 6: Wait for database to be ready
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[6/10] Waiting for database import to complete..." -ForegroundColor Yellow
+Write-Host "[6/11] Waiting for database import to complete..." -ForegroundColor Yellow
 Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
 Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
 Write-Host ""
@@ -620,7 +624,7 @@ if (-not $ready) {
 # Step 7: Patch Requests.php timeouts
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[7/10] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
+Write-Host "[7/11] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
 
 $RequestsPhpPath = Join-Path $BackupWpDir "wp-includes\Requests\src\Requests.php"
 if (-not (Test-Path $RequestsPhpPath)) {
@@ -657,7 +661,7 @@ else {
 # Step 8: Install WP-CLI and replace URLs
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[8/10] Replacing production URLs with localhost..." -ForegroundColor Yellow
+Write-Host "[8/11] Replacing production URLs with localhost..." -ForegroundColor Yellow
 
 $productionUrl = "https://waikatotainui.com"
 $localUrl = if ($WpPort -eq "80") { "http://localhost" } else { "http://localhost:$WpPort" }
@@ -684,11 +688,77 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 9: Disable Gravity Forms notifications
+# Step 9: Create local admin user and disable 2FA
+# ─────────────────────────────────────────────
+Write-Host ""
+Write-Host "[9/11] Creating local admin user and disabling 2FA..." -ForegroundColor Yellow
+
+if (-not $LocalAdminUser -or -not $LocalAdminPassword) {
+    Write-Host "  Skipping: LOCAL_ADMIN_USER or LOCAL_ADMIN_PASSWORD not set in .env" -ForegroundColor DarkYellow
+}
+else {
+    # Create or update local admin user via WP-CLI
+    $createUserScript = @"
+if wp --allow-root user get '$LocalAdminUser' > /dev/null 2>&1; then
+    wp --allow-root user update '$LocalAdminUser' --user_pass='$LocalAdminPassword' --role=administrator
+    echo "Updated existing user: $LocalAdminUser"
+else
+    wp --allow-root user create '$LocalAdminUser' '$LocalAdminEmail' --role=administrator --user_pass='$LocalAdminPassword'
+    echo "Created new user: $LocalAdminUser"
+fi
+"@
+
+    docker compose exec -T wordpress bash -c $createUserScript 2>&1 | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkGray
+    }
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Local admin user '$LocalAdminUser' ready." -ForegroundColor Green
+    }
+    else {
+        Write-Host "  WARNING: Failed to create/update local admin user." -ForegroundColor Yellow
+    }
+
+    # Disable 2FA for the local admin user by removing their Wordfence login-security secret.
+    # Wordfence stores per-user 2FA in wp_wfls_2fa_secrets; a missing row means no 2FA active.
+    $TempDisable2faPath = Join-Path $env:TEMP "disable-2fa.php"
+    $disable2faScript = @"
+<?php
+global `$wpdb;
+`$user = get_user_by('login', '$LocalAdminUser');
+if (!`$user) { echo "User '$LocalAdminUser' not found\n"; exit(1); }
+`$table = `$wpdb->prefix . 'wfls_2fa_secrets';
+`$deleted = `$wpdb->delete(`$table, ['user_id' => `$user->ID]);
+echo `$deleted === false
+    ? "No 2FA record found for $LocalAdminUser (already clear)\n"
+    : "Removed Wordfence 2FA for $LocalAdminUser ({`$deleted} record(s))\n";
+"@
+
+    Set-Content -Path $TempDisable2faPath -Value $disable2faScript -NoNewline
+
+    $containerId = docker compose ps -q wordpress
+    docker cp $TempDisable2faPath "${containerId}:/tmp/disable-2fa.php" 2>&1 | Out-Null
+
+    docker compose exec -T wordpress wp --allow-root eval-file /tmp/disable-2fa.php 2>&1 | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkGray
+    }
+
+    docker compose exec -T wordpress rm -f /tmp/disable-2fa.php 2>&1 | Out-Null
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Wordfence 2FA cleared for '$LocalAdminUser'." -ForegroundColor Green
+    }
+    else {
+        Write-Host "  WARNING: Failed to clear Wordfence 2FA." -ForegroundColor Yellow
+    }
+}
+
+# ─────────────────────────────────────────────
+# Step 10: Disable Gravity Forms notifications
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($DisableGfNotifications) {
-    Write-Host "[9/10] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+    Write-Host "[10/11] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
 
     # Use WP-CLI + PHP to properly handle notifications that lack an isActive field
     # (they default to active in GF but won't be caught by a simple string replace).
@@ -741,15 +811,15 @@ echo "Updated $updated form(s)\n";
     }
 }
 else {
-    Write-Host "[9/10] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
+    Write-Host "[10/11] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
-# Step 10: Redirect Make.com webhooks
+# Step 11: Redirect Make.com webhooks
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($GfWebhookRedirectHost) {
-    Write-Host "[10/10] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+    Write-Host "[11/11] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
 
     # Use a here-string to avoid quote escaping issues
     $webhookSql = @"
@@ -770,7 +840,7 @@ WHERE meta LIKE '%hook.us1.make.com%';
     }
 }
 else {
-    Write-Host "[10/10] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
+    Write-Host "[11/11] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
