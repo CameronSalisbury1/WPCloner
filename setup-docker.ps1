@@ -689,77 +689,47 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 9: Create local admin user and disable 2FA
+# Step 9: Disable Wordfence 2FA
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[9/11] Creating local admin user and disabling 2FA..." -ForegroundColor Yellow
+Write-Host "[9/11] Disabling Wordfence 2FA..." -ForegroundColor Yellow
 
-if (-not $LocalAdminUser -or -not $LocalAdminPassword) {
-    Write-Host "  Skipping: LOCAL_ADMIN_USER or LOCAL_ADMIN_PASSWORD not set in .env" -ForegroundColor DarkYellow
-}
-else {
-    # Create or update local admin user via WP-CLI
-    $createUserScript = @"
-if wp --allow-root user get '$LocalAdminUser' > /dev/null 2>&1; then
-    wp --allow-root user update '$LocalAdminUser' --user_pass='$LocalAdminPassword' --role=administrator
-    echo "Updated existing user: $LocalAdminUser"
-else
-    wp --allow-root user create '$LocalAdminUser' '$LocalAdminEmail' --role=administrator --user_pass='$LocalAdminPassword'
-    echo "Created new user: $LocalAdminUser"
-fi
-"@
-
-    docker compose exec -T wordpress bash -c $createUserScript 2>&1 | ForEach-Object {
-        Write-Host "  $_" -ForegroundColor DarkGray
-    }
-
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Local admin user '$LocalAdminUser' ready." -ForegroundColor Green
-    }
-    else {
-        Write-Host "  WARNING: Failed to create/update local admin user." -ForegroundColor Yellow
-    }
-
-    # Disable 2FA for the local admin user by removing their Wordfence login-security secret.
-    # Wordfence stores per-user 2FA in wp_wfls_2fa_secrets; a missing row means no 2FA active.
-    $TempDisable2faPath = Join-Path $env:TEMP "disable-2fa.php"
-    $disable2faScript = @"
+# Clear all 2FA secrets and remove the enforcement policy so no user is blocked by 2FA locally.
+$TempDisable2faPath = Join-Path $env:TEMP "disable-2fa.php"
+$disable2faScript = @"
 <?php
 global `$wpdb;
-`$user = get_user_by('login', '$LocalAdminUser');
-if (!`$user) { echo "User '$LocalAdminUser' not found\n"; exit(1); }
-`$table = `$wpdb->prefix . 'wfls_2fa_secrets';
-`$deleted = `$wpdb->delete(`$table, ['user_id' => `$user->ID]);
-echo `$deleted === false
-    ? "No 2FA record found for $LocalAdminUser (already clear)\n"
-    : "Removed Wordfence 2FA for $LocalAdminUser ({`$deleted} record(s))\n";
 
-// Delete the Wordfence Login Security enforcement settings so the "2FA required" policy
-// doesn't block login for users who have no 2FA configured (e.g. our local admin user).
-// Deleting this option resets WFLS to its default state (no role-based enforcement).
+// Remove all stored 2FA secrets so no user has 2FA active.
+`$table = `$wpdb->prefix . 'wfls_2fa_secrets';
+`$deleted = `$wpdb->query("TRUNCATE TABLE ``{`$table}``");
+echo `$deleted === false
+    ? "WARNING: Could not truncate {`$table}\n"
+    : "Cleared all Wordfence 2FA secrets\n";
+
+// Remove the enforcement policy so Wordfence doesn't require 2FA for any role.
 if (get_option('wfls-settings') !== false) {
     delete_option('wfls-settings');
-    echo "Cleared Wordfence Login Security enforcement settings (2FA requirement removed)\n";
+    echo "Cleared Wordfence Login Security enforcement settings\n";
 }
 "@
 
-    Set-Content -Path $TempDisable2faPath -Value $disable2faScript -NoNewline
+Set-Content -Path $TempDisable2faPath -Value $disable2faScript -NoNewline
 
-    $containerId = docker compose ps -q wordpress
-    docker cp $TempDisable2faPath "${containerId}:/tmp/disable-2fa.php" 2>&1 | Out-Null
+$containerId = docker compose ps -q wordpress
+docker cp $TempDisable2faPath "${containerId}:/tmp/disable-2fa.php" 2>&1 | Out-Null
 
-    docker compose exec -T wordpress wp --allow-root eval-file /tmp/disable-2fa.php 2>&1 | ForEach-Object {
-        Write-Host "  $_" -ForegroundColor DarkGray
-    }
+docker compose exec -T wordpress wp --allow-root eval-file /tmp/disable-2fa.php 2>&1 | ForEach-Object {
+    Write-Host "  $_" -ForegroundColor DarkGray
+}
 
-    docker compose exec -T wordpress rm -f /tmp/disable-2fa.php 2>&1 | Out-Null
+docker compose exec -T wordpress rm -f /tmp/disable-2fa.php 2>&1 | Out-Null
 
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Wordfence 2FA cleared for '$LocalAdminUser'." -ForegroundColor Green
-    }
-    else {
-        Write-Host "  WARNING: Failed to clear Wordfence 2FA." -ForegroundColor Yellow
-    }
+if ($LASTEXITCODE -eq 0) {
+    Write-Host "  Wordfence 2FA disabled." -ForegroundColor Green
+}
+else {
+    Write-Host "  WARNING: Failed to disable Wordfence 2FA." -ForegroundColor Yellow
 }
 
 # ─────────────────────────────────────────────
