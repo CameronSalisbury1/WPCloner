@@ -93,6 +93,11 @@ $WpPort = $EnvVars["WORDPRESS_PORT"]
 $PmaPort = $EnvVars["PHPMYADMIN_PORT"]
 $DisableGfNotifications = $EnvVars["DISABLE_GF_NOTIFICATIONS"] -eq "true"
 $GfWebhookRedirectHost = $EnvVars["GF_WEBHOOK_REDIRECT_HOST"]
+$GfWebhookRedirectHostIds = if ($EnvVars["GF_WEBHOOK_REDIRECT_HOST_IDS"]) {
+    @($EnvVars["GF_WEBHOOK_REDIRECT_HOST_IDS"] -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+} else {
+    @()
+}
 $DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
 $LocalAdminUser = $EnvVars["LOCAL_ADMIN_USER"]
 $LocalAdminPassword = $EnvVars["LOCAL_ADMIN_PASSWORD"]
@@ -798,24 +803,72 @@ else {
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($GfWebhookRedirectHost) {
-    Write-Host "[11/11] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+    if ($GfWebhookRedirectHostIds.Count -gt 0) {
+        $idList = $GfWebhookRedirectHostIds -join ","
+        Write-Host "[11/11] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
 
-    # Use a here-string to avoid quote escaping issues
-    $webhookSql = @"
+        # Redirect webhooks for specified form IDs
+        $redirectSql = @"
+UPDATE wp_gf_addon_feed
+SET meta = REPLACE(meta, 'hook.us1.make.com', '$GfWebhookRedirectHost')
+WHERE meta LIKE '%hook.us1.make.com%'
+AND form_id IN ($idList);
+"@
+
+        docker compose exec -T db mysql -u"$DbUser" -p"$DbPassword" "$DbName" -e $redirectSql 2>&1 | ForEach-Object {
+            if ($_ -notmatch "Warning.*password") { Write-Host "  $_" -ForegroundColor DarkGray }
+        }
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  WARNING: Failed to redirect webhooks for specified forms." -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "  Redirected: hook.us1.make.com -> $GfWebhookRedirectHost for form IDs: $idList" -ForegroundColor Green
+        }
+
+        # Disable ALL feeds on any form that has at least one make.com feed (and isn't in the allowed list)
+        $disableSql = @"
+UPDATE wp_gf_addon_feed
+SET is_active = 0
+WHERE form_id IN (
+    SELECT form_id FROM (
+        SELECT DISTINCT form_id FROM wp_gf_addon_feed
+        WHERE meta LIKE '%hook.us1.make.com%'
+        AND form_id NOT IN ($idList)
+    ) AS t
+);
+"@
+
+        docker compose exec -T db mysql -u"$DbUser" -p"$DbPassword" "$DbName" -e $disableSql 2>&1 | ForEach-Object {
+            if ($_ -notmatch "Warning.*password") { Write-Host "  $_" -ForegroundColor DarkGray }
+        }
+
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  Disabled Make.com webhook feeds for all other forms." -ForegroundColor Green
+        }
+        else {
+            Write-Host "  WARNING: Failed to disable webhook feeds for other forms." -ForegroundColor Yellow
+        }
+    }
+    else {
+        Write-Host "[11/11] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+
+        $webhookSql = @"
 UPDATE wp_gf_addon_feed
 SET meta = REPLACE(meta, 'hook.us1.make.com', '$GfWebhookRedirectHost')
 WHERE meta LIKE '%hook.us1.make.com%';
 "@
 
-    docker compose exec -T db mysql -u"$DbUser" -p"$DbPassword" "$DbName" -e $webhookSql 2>&1 | ForEach-Object {
-        Write-Host "  $_" -ForegroundColor DarkGray
-    }
+        docker compose exec -T db mysql -u"$DbUser" -p"$DbPassword" "$DbName" -e $webhookSql 2>&1 | ForEach-Object {
+            if ($_ -notmatch "Warning.*password") { Write-Host "  $_" -ForegroundColor DarkGray }
+        }
 
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "  Webhooks redirected: hook.us1.make.com -> $GfWebhookRedirectHost" -ForegroundColor Green
-    }
-    else {
-        Write-Host "  WARNING: Failed to redirect webhooks." -ForegroundColor Yellow
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  Webhooks redirected: hook.us1.make.com -> $GfWebhookRedirectHost" -ForegroundColor Green
+        }
+        else {
+            Write-Host "  WARNING: Failed to redirect webhooks." -ForegroundColor Yellow
+        }
     }
 }
 else {

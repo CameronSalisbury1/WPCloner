@@ -40,6 +40,7 @@ WORDPRESS_PORT=80
 PHPMYADMIN_PORT=8081
 DISABLE_GF_NOTIFICATIONS=true
 GF_WEBHOOK_REDIRECT_HOST=api-uat.waikatotainui.com
+GF_WEBHOOK_REDIRECT_HOST_IDS=1,2,3
 DISALLOW_FILE_MODS=false
 ```
 
@@ -226,10 +227,26 @@ WHERE notifications LIKE '%isActive%';
 ```
 
 **Redirect webhooks** (optional, via `.env`):
+- If `GF_WEBHOOK_REDIRECT_HOST_IDS` is set (comma-separated form IDs): redirects make.com URLs only for those forms; disables **all** feeds on any other form that has at least one make.com feed
+- If `GF_WEBHOOK_REDIRECT_HOST_IDS` is not set: redirects all make.com URLs (legacy behaviour)
+
 ```sql
+-- Redirect for specified form IDs
 UPDATE wp_gf_addon_feed
 SET meta = REPLACE(meta, 'hook.us1.make.com', '<GF_WEBHOOK_REDIRECT_HOST>')
-WHERE meta LIKE '%hook.us1.make.com%';
+WHERE meta LIKE '%hook.us1.make.com%'
+AND form_id IN (<GF_WEBHOOK_REDIRECT_HOST_IDS>);
+
+-- Disable ALL feeds on any form that has at least one make.com feed (and isn't in the allowed list)
+UPDATE wp_gf_addon_feed
+SET is_active = 0
+WHERE form_id IN (
+    SELECT form_id FROM (
+        SELECT DISTINCT form_id FROM wp_gf_addon_feed
+        WHERE meta LIKE '%hook.us1.make.com%'
+        AND form_id NOT IN (<GF_WEBHOOK_REDIRECT_HOST_IDS>)
+    ) AS t
+);
 ```
 
 **HMAC signing**: Automatically appended to `wp-config.php` via heredoc string
