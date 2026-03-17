@@ -101,6 +101,7 @@ $GfWebhookRedirectHostIds = if ($EnvVars["GF_WEBHOOK_REDIRECT_HOST_IDS"]) {
 }
 $DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
 $WtVerifyApiUrl = $EnvVars["WT_VERIFY_API_URL"]
+$WtVerifyApiKey = $EnvVars["WT_VERIFY_API_KEY"]
 $LocalAdminUser = $EnvVars["LOCAL_ADMIN_USER"]
 $LocalAdminPassword = $EnvVars["LOCAL_ADMIN_PASSWORD"]
 $LocalAdminEmail = if ($EnvVars["LOCAL_ADMIN_EMAIL"]) { $EnvVars["LOCAL_ADMIN_EMAIL"] } else { "$LocalAdminUser@localhost.local" }
@@ -433,6 +434,15 @@ if ($WtVerifyApiUrl) {
     }
 }
 
+# --- WT_VERIFY_API_KEY: from .env (optional override) ---
+if ($WtVerifyApiKey) {
+    $newConfig = $config -replace "define\s*\(\s*'WT_VERIFY_API_KEY'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_VERIFY_API_KEY', '$WtVerifyApiKey'); // Patched for local"
+    if ($newConfig -ne $config) {
+        $config = $newConfig
+        $changes += "WT_VERIFY_API_KEY -> $WtVerifyApiKey"
+    }
+}
+
 # Write patched config to temp file (docker cp'd into the container in Step 5)
 Set-Content -Path $TempWpConfigPath -Value $config -NoNewline
 
@@ -451,7 +461,7 @@ $hmacCode = @'
 // Only run if WordPress functions are available (skip during WP-CLI bootstrap)
 if ( function_exists( 'add_filter' ) ) {
     add_filter( 'gravityflow_webhook_args', function( $args, $entry, $current_step ) {
-        $secret = 'wt-webhook-secret-2024-hmac-signing';
+        $secret = defined( 'WT_VERIFY_API_KEY' ) ? WT_VERIFY_API_KEY : '';
 
         // Get the body - check what format it's in
         $body = isset( $args['body'] ) ? $args['body'] : '';
