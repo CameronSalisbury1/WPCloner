@@ -102,6 +102,7 @@ $GfWebhookRedirectHostIds = if ($EnvVars["GF_WEBHOOK_REDIRECT_HOST_IDS"]) {
 $DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
 $WtVerifyApiUrl = $EnvVars["WT_VERIFY_API_URL"]
 $WtVerifyApiKey = $EnvVars["WT_VERIFY_API_KEY"]
+$WtAtangaToken = $EnvVars["WT_ATANGA_TOKEN"]
 $LocalAdminUser = $EnvVars["LOCAL_ADMIN_USER"]
 $LocalAdminPassword = $EnvVars["LOCAL_ADMIN_PASSWORD"]
 $LocalAdminEmail = if ($EnvVars["LOCAL_ADMIN_EMAIL"]) { $EnvVars["LOCAL_ADMIN_EMAIL"] } else { "$LocalAdminUser@localhost.local" }
@@ -443,6 +444,21 @@ if ($WtVerifyApiKey) {
     }
 }
 
+# --- WT_ATANGA_TOKEN: from .env (not in production config, so append if missing) ---
+if ($WtAtangaToken) {
+    $newConfig = $config -replace "define\s*\(\s*'WT_ATANGA_TOKEN'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_ATANGA_TOKEN', '$WtAtangaToken'); // Patched for local"
+    if ($newConfig -ne $config) {
+        $config = $newConfig
+        $changes += "WT_ATANGA_TOKEN -> $WtAtangaToken"
+    } elseif (-not $config.Contains("'WT_ATANGA_TOKEN'")) {
+        $stopMarker = "/* That's all, stop editing!"
+        if ($config.Contains($stopMarker)) {
+            $config = $config.Replace($stopMarker, "define('WT_ATANGA_TOKEN', '$WtAtangaToken'); // Added for local`n$stopMarker")
+            $changes += "WT_ATANGA_TOKEN -> $WtAtangaToken (added)"
+        }
+    }
+}
+
 # Write patched config to temp file (docker cp'd into the container in Step 5)
 Set-Content -Path $TempWpConfigPath -Value $config -NoNewline
 
@@ -489,7 +505,7 @@ if ( function_exists( 'add_filter' ) ) {
 
         // Set headers
         $args['headers']['X-Hub-Signature-256'] = 'sha256=' . $signature;
-        $args['headers']['X-atanga'] = 'haumaru';
+        $args['headers']['X-atanga'] = defined( 'WT_ATANGA_TOKEN' ) ? WT_ATANGA_TOKEN : '';
 
         // Important: Ensure the body that gets sent is the SAME as what we computed HMAC on
         $args['body'] = $body;
@@ -680,6 +696,44 @@ else {
     }
     else {
         Write-Host "  No changes needed (already patched?)" -ForegroundColor DarkYellow
+    }
+}
+
+# Patch gravity-forms.php: fix verify API signature header name and add atanga header
+$GravityFormsPhpPath = Join-Path $BackupWpDir "wp-content\themes\pro-child\includes\gravity-forms.php"
+if (-not (Test-Path $GravityFormsPhpPath)) {
+    Write-Host "  gravity-forms.php not found at: $GravityFormsPhpPath, skipping." -ForegroundColor DarkYellow
+}
+else {
+    $gravityFormsContent = Get-Content $GravityFormsPhpPath -Raw
+    $gfChanges = @()
+
+    # Fix signature header name
+    $newContent = $gravityFormsContent.Replace("'X-Signature' => 'sha256=' . `$signature_hex", "'X-Hub-Signature-256' => 'sha256=' . `$signature_hex")
+    if ($newContent -ne $gravityFormsContent) {
+        $gravityFormsContent = $newContent
+        $gfChanges += "Verify API header: X-Signature -> X-Hub-Signature-256"
+    }
+
+    # Add X-atanga header after X-Hub-Signature-256
+    $atangaHeader = "`n            'X-atanga' => defined('WT_ATANGA_TOKEN') ? WT_ATANGA_TOKEN : ''"
+    $newContent = $gravityFormsContent.Replace("'X-Hub-Signature-256' => 'sha256=' . `$signature_hex", "'X-Hub-Signature-256' => 'sha256=' . `$signature_hex," + $atangaHeader)
+    if ($newContent -ne $gravityFormsContent) {
+        $gravityFormsContent = $newContent
+        $gfChanges += "Verify API header: added X-atanga"
+    }
+
+    if ($gfChanges.Count -gt 0) {
+        $TempGravityFormsPath = Join-Path $env:TEMP "gravity-forms-patched.php"
+        Set-Content -Path $TempGravityFormsPath -Value $gravityFormsContent -NoNewline
+        $containerId = docker compose ps -q wordpress
+        docker cp $TempGravityFormsPath "${containerId}:/var/www/html/wp-content/themes/pro-child/includes/gravity-forms.php" 2>&1 | Out-Null
+        foreach ($change in $gfChanges) {
+            Write-Host "  $change" -ForegroundColor Green
+        }
+    }
+    else {
+        Write-Host "  gravity-forms.php: No changes needed (already patched?)" -ForegroundColor DarkYellow
     }
 }
 
