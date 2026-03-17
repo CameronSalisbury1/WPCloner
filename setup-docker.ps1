@@ -99,6 +99,7 @@ $GfWebhookRedirectHostIds = if ($EnvVars["GF_WEBHOOK_REDIRECT_HOST_IDS"]) {
     @()
 }
 $DisallowFileMods = $EnvVars["DISALLOW_FILE_MODS"] -eq "true"
+$WtVerifyApiUrl = $EnvVars["WT_VERIFY_API_URL"]
 $LocalAdminUser = $EnvVars["LOCAL_ADMIN_USER"]
 $LocalAdminPassword = $EnvVars["LOCAL_ADMIN_PASSWORD"]
 $LocalAdminEmail = if ($EnvVars["LOCAL_ADMIN_EMAIL"]) { $EnvVars["LOCAL_ADMIN_EMAIL"] } else { "$LocalAdminUser@localhost.local" }
@@ -420,6 +421,15 @@ $newConfig = $config -replace "define\s*\(\s*'WP_MAX_MEMORY_LIMIT'\s*,\s*'[^']*'
 if ($newConfig -ne $config) {
     $config = $newConfig
     $changes += "WP_MAX_MEMORY_LIMIT -> 2048M"
+}
+
+# --- WT_VERIFY_API_URL: from .env (optional override) ---
+if ($WtVerifyApiUrl) {
+    $newConfig = $config -replace "define\s*\(\s*'WT_VERIFY_API_URL'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_VERIFY_API_URL', '$WtVerifyApiUrl'); // Patched for Docker"
+    if ($newConfig -ne $config) {
+        $config = $newConfig
+        $changes += "WT_VERIFY_API_URL -> $WtVerifyApiUrl"
+    }
 }
 
 # Write patched config to temp file (docker cp'd into the container in Step 5)
