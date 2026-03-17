@@ -863,14 +863,14 @@ AND form_id IN ($idList);
             Write-Host "  Redirected: hook.us1.make.com -> $GfWebhookRedirectHost for form IDs: $idList" -ForegroundColor Green
         }
 
-        # Disable ALL feeds on any form that has at least one make.com feed (and isn't in the allowed list)
+        # Disable ALL feeds on any form that has at least one make.com or api.waikatotainui.maori.nz feed (and isn't in the allowed list)
         $disableSql = @"
 UPDATE wp_gf_addon_feed
 SET is_active = 0
 WHERE form_id IN (
     SELECT form_id FROM (
         SELECT DISTINCT form_id FROM wp_gf_addon_feed
-        WHERE meta LIKE '%hook.us1.make.com%'
+        WHERE (meta LIKE '%hook.us1.make.com%' OR meta LIKE '%api.waikatotainui.maori.nz%')
         AND form_id NOT IN ($idList)
     ) AS t
 );
