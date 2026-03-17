@@ -14,9 +14,10 @@
     6. Waits for the database import to complete
     7. Patches Requests.php timeouts inside the container
     8. Replaces production URLs with localhost
-    9. Creates a local admin user and disables 2FA
-    10. Disables Gravity Forms notifications (optional)
-    11. Redirects webhooks (optional)
+    9. Creates a local admin user
+    10. Disables Wordfence 2FA
+    11. Disables Gravity Forms notifications (optional)
+    12. Redirects webhooks (optional)
 
     PHP files are served from a named Docker volume (native Linux filesystem speed).
     Only wp-content/uploads is bind-mounted from the Windows host so uploaded media
@@ -704,10 +705,36 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 9: Disable Wordfence 2FA
+# Step 9: Create local admin user
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[9/11] Disabling Wordfence 2FA..." -ForegroundColor Yellow
+Write-Host "[9/12] Creating local admin user '$LocalAdminUser'..." -ForegroundColor Yellow
+
+$userExists = docker compose exec -T wordpress wp --allow-root user get $LocalAdminUser --field=login 2>&1
+if ($LASTEXITCODE -eq 0) {
+    # User exists — update password and ensure administrator role
+    docker compose exec -T wordpress wp --allow-root user update $LocalAdminUser --user_pass="$LocalAdminPassword" --role=administrator 2>&1 | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkGray
+    }
+    Write-Host "  User '$LocalAdminUser' already exists — password and role updated." -ForegroundColor Green
+}
+else {
+    docker compose exec -T wordpress wp --allow-root user create $LocalAdminUser $LocalAdminEmail --role=administrator --user_pass="$LocalAdminPassword" 2>&1 | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkGray
+    }
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Created admin user '$LocalAdminUser'." -ForegroundColor Green
+    }
+    else {
+        Write-Host "  WARNING: Failed to create admin user." -ForegroundColor Yellow
+    }
+}
+
+# ─────────────────────────────────────────────
+# Step 10: Disable Wordfence 2FA
+# ─────────────────────────────────────────────
+Write-Host ""
+Write-Host "[10/12] Disabling Wordfence 2FA..." -ForegroundColor Yellow
 
 # Clear all 2FA secrets and remove the enforcement policy so no user is blocked by 2FA locally.
 $TempDisable2faPath = Join-Path $env:TEMP "disable-2fa.php"
@@ -748,11 +775,11 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 10: Disable Gravity Forms notifications
+# Step 11: Disable Gravity Forms notifications
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($DisableGfNotifications) {
-    Write-Host "[10/11] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+    Write-Host "[11/12] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
 
     # Use WP-CLI + PHP to properly handle notifications that lack an isActive field
     # (they default to active in GF but won't be caught by a simple string replace).
@@ -805,17 +832,17 @@ echo "Updated $updated form(s)\n";
     }
 }
 else {
-    Write-Host "[10/11] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
+    Write-Host "[11/12] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
-# Step 11: Redirect Make.com webhooks
+# Step 12: Redirect Make.com webhooks
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($GfWebhookRedirectHost) {
     if ($GfWebhookRedirectHostIds.Count -gt 0) {
         $idList = $GfWebhookRedirectHostIds -join ","
-        Write-Host "[11/11] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
+        Write-Host "[12/12] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
 
         # Redirect webhooks for specified form IDs
         $redirectSql = @"
@@ -861,7 +888,7 @@ WHERE form_id IN (
         }
     }
     else {
-        Write-Host "[11/11] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+        Write-Host "[12/12] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
 
         $webhookSql = @"
 UPDATE wp_gf_addon_feed
@@ -882,7 +909,7 @@ WHERE meta LIKE '%hook.us1.make.com%';
     }
 }
 else {
-    Write-Host "[11/11] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
+    Write-Host "[12/12] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
