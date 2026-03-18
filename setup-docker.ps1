@@ -817,6 +817,10 @@ else {
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($GfWebhookRedirectHost) {
+    # JSON in the DB stores URLs with escaped slashes (e.g. https:\/\/hook.us1.make.com).
+    # MySQL needs \\ to represent a literal backslash, so :// becomes :\\/\\/ in the SQL literal.
+    $GfWebhookRedirectHostSql = $GfWebhookRedirectHost -replace '://', ':\\/\\/'
+
     if ($GfWebhookRedirectHostIds.Count -gt 0) {
         $idList = $GfWebhookRedirectHostIds -join ","
         Write-Host "[13/13] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
@@ -824,7 +828,7 @@ if ($GfWebhookRedirectHost) {
         # Redirect webhooks for specified form IDs
         $redirectSql = @"
 UPDATE wp_gf_addon_feed
-SET meta = REPLACE(meta, 'hook.us1.make.com', '$GfWebhookRedirectHost')
+SET meta = REPLACE(meta, 'https:\\/\\/hook.us1.make.com', '$GfWebhookRedirectHostSql')
 WHERE meta LIKE '%hook.us1.make.com%'
 AND form_id IN ($idList);
 "@
@@ -837,7 +841,7 @@ AND form_id IN ($idList);
             Write-Host "  WARNING: Failed to redirect webhooks for specified forms." -ForegroundColor Yellow
         }
         else {
-            Write-Host "  Redirected: hook.us1.make.com -> $GfWebhookRedirectHost for form IDs: $idList" -ForegroundColor Green
+            Write-Host "  Redirected: https://hook.us1.make.com -> $GfWebhookRedirectHost for form IDs: $idList" -ForegroundColor Green
         }
 
         # Disable ALL feeds on any form that has at least one make.com or api.waikatotainui.maori.nz feed (and isn't in the allowed list)
@@ -869,7 +873,7 @@ WHERE form_id IN (
 
         $webhookSql = @"
 UPDATE wp_gf_addon_feed
-SET meta = REPLACE(meta, 'hook.us1.make.com', '$GfWebhookRedirectHost')
+SET meta = REPLACE(meta, 'https:\\/\\/hook.us1.make.com', '$GfWebhookRedirectHostSql')
 WHERE meta LIKE '%hook.us1.make.com%';
 "@
 
@@ -878,7 +882,7 @@ WHERE meta LIKE '%hook.us1.make.com%';
         }
 
         if ($LASTEXITCODE -eq 0) {
-            Write-Host "  Webhooks redirected: hook.us1.make.com -> $GfWebhookRedirectHost" -ForegroundColor Green
+            Write-Host "  Webhooks redirected: https://hook.us1.make.com -> $GfWebhookRedirectHost" -ForegroundColor Green
         }
         else {
             Write-Host "  WARNING: Failed to redirect webhooks." -ForegroundColor Yellow

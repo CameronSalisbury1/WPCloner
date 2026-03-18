@@ -44,7 +44,7 @@ DB_ROOT_PASSWORD=rootpassword
 WORDPRESS_PORT=80
 PHPMYADMIN_PORT=8081
 DISABLE_GF_NOTIFICATIONS=true
-GF_WEBHOOK_REDIRECT_HOST=api-uat.waikatotainui.com
+GF_WEBHOOK_REDIRECT_HOST=http://host.docker.internal:7071
 GF_WEBHOOK_REDIRECT_HOST_IDS=1,2,3
 DISALLOW_FILE_MODS=false
 ```
@@ -72,6 +72,25 @@ docker compose exec -T db mysql -u<DB_USER> -p<DB_PASSWORD> -e "SELECT 1;"
 
 **Test phpMyAdmin**:
 - `http://localhost:8081`
+
+**Production backup files** (read-only source — never modify these):
+```
+Backup/wordpress/                          # WordPress root
+Backup/wordpress/wp-config.php            # Production wp-config.php
+Backup/wordpress/wp-content/themes/pro-child/includes/gravity-forms.php  # Theme hooks
+Backup/database/*.sql                     # Production database dump
+```
+These are located at `C:\repos\Tainui\WP\Backup\` (one level above this repo). Scripts always read from here and write patched versions to temp files, then inject via `docker cp`.
+
+**WordPress logs** (PHP errors, `error_log()` calls, debug output):
+```bash
+# View the debug log file inside the container
+MSYS_NO_PATHCONV=1 docker exec <container_id> tail -50 /var/www/html/wp-content/debug.log
+
+# Or copy it out
+MSYS_NO_PATHCONV=1 docker cp <container_id>:/var/www/html/wp-content/debug.log ./debug.log
+```
+Note: `WP_DEBUG_LOG=true` writes to `/var/www/html/wp-content/debug.log`, NOT to container stderr.
 
 ## Code Style Guidelines
 
@@ -198,7 +217,7 @@ When modifying `wp-config.php`:
 - `WP_MEMORY_LIMIT`: any → `2048M`
 - `WP_MAX_MEMORY_LIMIT`: any → `2048M`
 - Remove `advanced-cache.php` and `object-cache.php` drop-ins
-- Append Gravity Flow webhook HMAC signing filter
+- Set `GRAVITYFLOW_WEBHOOK_SECRET` and `WT_VERIFY_API_KEY` constants (both set to the same value from `.env`)
 
 ### Database Operations
 
@@ -235,10 +254,12 @@ WHERE notifications LIKE '%isActive%';
 - If `GF_WEBHOOK_REDIRECT_HOST_IDS` is set (comma-separated form IDs): redirects make.com URLs only for those forms; disables **all** feeds on any other form that has at least one make.com feed
 - If `GF_WEBHOOK_REDIRECT_HOST_IDS` is not set: redirects all make.com URLs (legacy behaviour)
 
+**Important**: URLs in `wp_gf_addon_feed.meta` are JSON-encoded, so `://` is stored as `:\/\/`. MySQL needs `\\` to represent a literal `\`, so the search/replace strings must use `:\\/\\/`.
+
 ```sql
 -- Redirect for specified form IDs
 UPDATE wp_gf_addon_feed
-SET meta = REPLACE(meta, 'hook.us1.make.com', '<GF_WEBHOOK_REDIRECT_HOST>')
+SET meta = REPLACE(meta, 'https:\\/\\/hook.us1.make.com', '<GF_WEBHOOK_REDIRECT_HOST with :// escaped to :\\/\\/>')
 WHERE meta LIKE '%hook.us1.make.com%'
 AND form_id IN (<GF_WEBHOOK_REDIRECT_HOST_IDS>);
 
@@ -254,17 +275,19 @@ WHERE form_id IN (
 );
 ```
 
-**HMAC signing**: Automatically appended to `wp-config.php` via heredoc string
+**HMAC signing**: Applied by patching `gravity-forms.php` (from `Backup/`) via `docker cp`. Changes `X-Signature` header to `X-Hub-Signature-256` and adds `X-atanga` header in all three signature locations (gravityflow_webhook_args, gform_webhooks_request_args, and verify API calls).
 
 ## Common Pitfalls
 
-1. **Robocopy exit codes**: Exit codes 0-7 are success, not just 0
-2. **MySQL passwords in output**: Filter out password warnings with regex
-3. **Large file operations**: Use streaming I/O, not `Get-Content`/`Set-Content`
-4. **Docker timing**: Database import can take 20+ minutes; poll via TCP (`-h 127.0.0.1`) not socket
-5. **Path separators**: Use `Join-Path`, not manual concatenation with `\`
-6. **Script location**: Calculate `$WorkingDir` relative to script, not CWD
-7. **DB polling method**: Use `-h 127.0.0.1` to force TCP — MySQL runs with `--skip-networking` during import so socket connections will be refused until the import completes
+1. **Never manually apply fixes to the running database or containers**: If a script bug is found, fix the script and test via `.\setup-docker.ps1 -Force`. Manually patching the live DB makes it impossible to verify the script works correctly and leaves the environment in an unknown state.
+2. **Robocopy exit codes**: Exit codes 0-7 are success, not just 0
+3. **MySQL passwords in output**: Filter out password warnings with regex
+4. **Large file operations**: Use streaming I/O, not `Get-Content`/`Set-Content`
+5. **Docker timing**: Database import can take 20+ minutes; poll via TCP (`-h 127.0.0.1`) not socket
+6. **Path separators**: Use `Join-Path`, not manual concatenation with `\`
+7. **Script location**: Calculate `$WorkingDir` relative to script, not CWD
+8. **DB polling method**: Use `-h 127.0.0.1` to force TCP — MySQL runs with `--skip-networking` during import so socket connections will be refused until the import completes
+9. **Git Bash path conversion**: Prefix `docker exec` commands with `MSYS_NO_PATHCONV=1` when passing Unix paths (e.g. `/var/www/html/...`), otherwise Git Bash converts them to Windows paths
 
 ## File Structure
 
