@@ -9,6 +9,7 @@ This repository contains PowerShell scripts for setting up a local WordPress dev
 **Key Scripts**:
 - `setup-docker.ps1` - **Primary script**: Docker-based setup using MySQL 8.0 + WordPress + phpMyAdmin
 - `backup.ps1` - Download WordPress files from production SFTP server using WinSCP
+- `query.ps1` - Run SQL queries against the local WordPress Docker MySQL instance
 
 **Environment**: Windows-only PowerShell 5.1+ required
 
@@ -25,6 +26,10 @@ This repository contains PowerShell scripts for setting up a local WordPress dev
 .\backup.ps1              # Sync with deletions (mirror mode)
 .\backup.ps1 -NoDelete    # Sync without deleting local files
 .\backup.ps1 -DryRun      # Preview changes only
+
+# Run SQL queries
+.\query.ps1 "SELECT id, post_title FROM wp_posts LIMIT 10;"
+.\query.ps1 -File .\my-query.sql
 ```
 
 ### Environment Configuration
@@ -268,6 +273,7 @@ wp-setup/
 ├── .env                      # Environment config (gitignored)
 ├── .gitignore               # Excludes Backup/, uploads/, database/, credentials
 ├── backup.ps1               # SFTP download script
+├── query.ps1                # SQL query helper against local Docker MySQL
 ├── backup-config.json       # SFTP credentials (gitignored)
 ├── backup.log               # WinSCP transfer log (gitignored)
 ├── docker-compose.yml       # Docker services definition (MySQL 8.0 + WordPress + phpMyAdmin)

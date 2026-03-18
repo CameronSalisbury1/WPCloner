@@ -7,17 +7,18 @@
     This script:
     1. Copies wp-content/uploads from Backup/ to uploads/ (the bind-mount source)
     2. Prepares the database import file from Backup/
-    3. Patches wp-config.php in memory (read from Backup/, never modifies Backup/)
-    4. Starts Docker containers (MySQL, WordPress, phpMyAdmin)
-    5. Copies WordPress files from Backup/ directly into the Docker named volume,
-       skipping uploads (bind-mounted) and injecting the patched wp-config.php
-    6. Waits for the database import to complete
+    3. Starts Docker containers (MySQL, WordPress, phpMyAdmin)
+    4. Copies WordPress files from Backup/ directly into the Docker named volume,
+       skipping uploads (bind-mounted)
+    5. Waits for the database import to complete
+    6. Patches wp-config.php (read from Backup/, never modifies Backup/)
     7. Patches Requests.php timeouts inside the container
-    8. Replaces production URLs with localhost
-    9. Creates a local admin user
-    10. Disables Wordfence 2FA
-    11. Disables Gravity Forms notifications (optional)
-    12. Redirects webhooks (optional)
+    8. Patches gravity-forms.php webhook signatures
+    9. Replaces production URLs with localhost
+    10. Creates a local admin user
+    11. Disables Wordfence 2FA
+    12. Disables Gravity Forms notifications (optional)
+    13. Redirects webhooks (optional)
 
     PHP files are served from a named Docker volume (native Linux filesystem speed).
     Only wp-content/uploads is bind-mounted from the Windows host so uploaded media
@@ -124,7 +125,7 @@ Write-Host ""
 # Step 0: Force mode - wipe existing setup
 # ─────────────────────────────────────────────
 if ($Force) {
-    Write-Host "[0/11] Force mode: Wiping existing setup..." -ForegroundColor Red
+    Write-Host "[0/13] Force mode: Wiping existing setup..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -159,7 +160,7 @@ if ($Force) {
     Write-Host ""
 }
 elseif ($ForceDb) {
-    Write-Host "[0/11] ForceDb: Wiping database for fresh import..." -ForegroundColor Red
+    Write-Host "[0/13] ForceDb: Wiping database for fresh import..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -194,7 +195,7 @@ elseif ($ForceDb) {
     Write-Host ""
 }
 elseif ($ForceFiles) {
-    Write-Host "[0/11] ForceFiles: Wiping WordPress files for fresh copy..." -ForegroundColor Red
+    Write-Host "[0/13] ForceFiles: Wiping WordPress files for fresh copy..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -222,7 +223,7 @@ elseif ($ForceFiles) {
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/11] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/13] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check Docker
 try {
@@ -258,7 +259,7 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 # Step 2: Copy uploads and prepare database
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/11] Copying uploads and preparing database..." -ForegroundColor Yellow
+Write-Host "[2/13] Copying uploads and preparing database..." -ForegroundColor Yellow
 
 $UploadsDir = Join-Path $WorkingDir "uploads"
 $WorkingDbDir = Join-Path $WorkingDir "database"
@@ -321,216 +322,10 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 3: Patch wp-config.php for local Docker
+# Step 3: Start Docker containers
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/11] Patching wp-config.php for local environment..." -ForegroundColor Yellow
-
-# Read from Backup/ - we never modify Backup/
-# The patched version is written to a temp file and docker cp'd into the container in Step 5.
-$BackupWpConfigPath = Join-Path $BackupWpDir "wp-config.php"
-$TempWpConfigPath = Join-Path $env:TEMP "wp-config-docker-patched.php"
-
-if (-not (Test-Path $BackupWpConfigPath)) {
-    Write-Error "wp-config.php not found at: $BackupWpConfigPath"
-    exit 1
-}
-
-$config = Get-Content $BackupWpConfigPath -Raw
-
-# Track what we change
-$changes = @()
-
-# --- DB_HOST: -> db (Docker service name) ---
-$newConfig = $config -replace "define\s*\(\s*'DB_HOST'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_HOST', 'db'); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "DB_HOST -> db"
-}
-
-# --- DB_NAME ---
-$newConfig = $config -replace "define\s*\(\s*'DB_NAME'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_NAME', '$DbName'); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "DB_NAME -> $DbName"
-}
-
-# --- DB_USER ---
-$newConfig = $config -replace "define\s*\(\s*'DB_USER'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_USER', '$DbUser'); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "DB_USER -> $DbUser"
-}
-
-# --- DB_PASSWORD ---
-$newConfig = $config -replace "define\s*\(\s*'DB_PASSWORD'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_PASSWORD', '$DbPassword'); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "DB_PASSWORD -> <set>"
-}
-
-# --- FORCE_SSL_ADMIN: false ---
-$newConfig = $config -replace "define\s*\(\s*'FORCE_SSL_ADMIN'\s*,\s*(true|false)\s*\)\s*;", "define('FORCE_SSL_ADMIN', false); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "FORCE_SSL_ADMIN -> false"
-}
-
-# --- WP_CACHE: false ---
-$newConfig = $config -replace "define\s*\(\s*'WP_CACHE'\s*,\s*(true|false)\s*\)\s*;", "define('WP_CACHE', false); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "WP_CACHE -> false"
-}
-
-# --- WP_REDIS_DISABLED: true ---
-$newConfig = $config -replace "define\s*\(\s*'WP_REDIS_DISABLED'\s*,\s*(true|false)\s*\)\s*;", "define('WP_REDIS_DISABLED', true); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "WP_REDIS_DISABLED -> true"
-}
-
-# --- DISALLOW_FILE_MODS: based on .env setting ---
-$newValue = $DisallowFileMods.ToString().ToLower()
-$newConfig = $config -replace "define\s*\(\s*'DISALLOW_FILE_MODS'\s*,\s*(true|false)\s*\)\s*;", "define('DISALLOW_FILE_MODS', $newValue);"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "DISALLOW_FILE_MODS -> $newValue"
-}
-
-# --- WP_DEBUG: true ---
-$newConfig = $config -replace "define\s*\(\s*'WP_DEBUG'\s*,\s*(true|false)\s*\)\s*;", "define('WP_DEBUG', true); // Patched for Docker: debug enabled"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "WP_DEBUG -> true"
-}
-
-# --- WP_DEBUG_LOG: true ---
-$newConfig = $config -replace "define\s*\(\s*'WP_DEBUG_LOG'\s*,\s*(true|false)\s*\)\s*;", "define('WP_DEBUG_LOG', true); // Patched for Docker: debug log enabled"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "WP_DEBUG_LOG -> true"
-}
-
-# --- WP_MEMORY_LIMIT: 2048M ---
-$newConfig = $config -replace "define\s*\(\s*'WP_MEMORY_LIMIT'\s*,\s*'[^']*'\s*\)\s*;", "define('WP_MEMORY_LIMIT', '2048M'); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "WP_MEMORY_LIMIT -> 2048M"
-}
-
-# --- WP_MAX_MEMORY_LIMIT: 2048M ---
-$newConfig = $config -replace "define\s*\(\s*'WP_MAX_MEMORY_LIMIT'\s*,\s*'[^']*'\s*\)\s*;", "define('WP_MAX_MEMORY_LIMIT', '2048M'); // Patched for Docker"
-if ($newConfig -ne $config) {
-    $config = $newConfig
-    $changes += "WP_MAX_MEMORY_LIMIT -> 2048M"
-}
-
-# --- WT_VERIFY_API_URL: from .env (optional override) ---
-if ($WtVerifyApiUrl) {
-    $newConfig = $config -replace "define\s*\(\s*'WT_VERIFY_API_URL'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_VERIFY_API_URL', '$WtVerifyApiUrl'); // Patched for Docker"
-    if ($newConfig -ne $config) {
-        $config = $newConfig
-        $changes += "WT_VERIFY_API_URL -> $WtVerifyApiUrl"
-    }
-}
-
-# --- WT_VERIFY_API_KEY: from .env (optional override) ---
-if ($WtVerifyApiKey) {
-    $newConfig = $config -replace "define\s*\(\s*'WT_VERIFY_API_KEY'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_VERIFY_API_KEY', '$WtVerifyApiKey'); // Patched for local"
-    if ($newConfig -ne $config) {
-        $config = $newConfig
-        $changes += "WT_VERIFY_API_KEY -> $WtVerifyApiKey"
-    }
-}
-
-# --- WT_ATANGA_TOKEN: from .env (not in production config, so append if missing) ---
-if ($WtAtangaToken) {
-    $newConfig = $config -replace "define\s*\(\s*'WT_ATANGA_TOKEN'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_ATANGA_TOKEN', '$WtAtangaToken'); // Patched for local"
-    if ($newConfig -ne $config) {
-        $config = $newConfig
-        $changes += "WT_ATANGA_TOKEN -> $WtAtangaToken"
-    } elseif (-not $config.Contains("'WT_ATANGA_TOKEN'")) {
-        $stopMarker = "/* That's all, stop editing!"
-        if ($config.Contains($stopMarker)) {
-            $config = $config.Replace($stopMarker, "define('WT_ATANGA_TOKEN', '$WtAtangaToken'); // Added for local`n$stopMarker")
-            $changes += "WT_ATANGA_TOKEN -> $WtAtangaToken (added)"
-        }
-    }
-}
-
-# Write patched config to temp file (docker cp'd into the container in Step 5)
-Set-Content -Path $TempWpConfigPath -Value $config -NoNewline
-
-foreach ($change in $changes) {
-    Write-Host "  $change" -ForegroundColor Green
-}
-
-if ($changes.Count -eq 0) {
-    Write-Host "  No changes needed (already patched?)" -ForegroundColor DarkYellow
-}
-
-# --- Add Gravity Flow webhook HMAC signing to wp-config.php ---
-$hmacCode = @'
-
-// Gravity Flow Webhook HMAC Signing (added by setup-docker.ps1)
-// Only run if WordPress functions are available (skip during WP-CLI bootstrap)
-if ( function_exists( 'add_filter' ) ) {
-    add_filter( 'gravityflow_webhook_args', function( $args, $entry, $current_step ) {
-        $secret = defined( 'WT_VERIFY_API_KEY' ) ? WT_VERIFY_API_KEY : '';
-
-        // Get the body - check what format it's in
-        $body = isset( $args['body'] ) ? $args['body'] : '';
-
-        // Convert to string if it's an array (this might be the issue!)
-        if ( is_array( $body ) ) {
-            error_log( '[GF HMAC DEBUG] Body is an ARRAY - converting to query string' );
-            error_log( '[GF HMAC DEBUG] Array keys: ' . implode( ', ', array_keys( $body ) ) );
-            $body = http_build_query( $body );
-        } else {
-            error_log( '[GF HMAC DEBUG] Body is already a STRING' );
-        }
-
-        // Log body details for debugging
-        error_log( '[GF HMAC DEBUG] Body length: ' . strlen( $body ) );
-        error_log( '[GF HMAC DEBUG] Body first 200 chars: ' . substr( $body, 0, 200 ) );
-        error_log( '[GF HMAC DEBUG] Body last 50 chars: ' . substr( $body, -50 ) );
-
-        // Compute HMAC
-        $signature = hash_hmac( 'sha256', $body, $secret );
-
-        // Log the computed signature
-        error_log( '[GF HMAC DEBUG] Computed signature: ' . $signature );
-        error_log( '[GF HMAC DEBUG] Full header value: sha256=' . $signature );
-
-        // Set headers
-        $args['headers']['X-Hub-Signature-256'] = 'sha256=' . $signature;
-        $args['headers']['X-atanga'] = defined( 'WT_ATANGA_TOKEN' ) ? WT_ATANGA_TOKEN : '';
-
-        // Important: Ensure the body that gets sent is the SAME as what we computed HMAC on
-        $args['body'] = $body;
-
-        // Log what we're about to send
-        error_log( '[GF HMAC DEBUG] Final args body type: ' . gettype( $args['body'] ) );
-        error_log( '[GF HMAC DEBUG] Final args body length: ' . strlen( $args['body'] ) );
-
-        return $args;
-    }, 10, 4 );
-}
-'@
-
-# Append HMAC code to the temp file if not already present
-$currentConfig = Get-Content $TempWpConfigPath -Raw
-if (-not $currentConfig.Contains('gravityflow_webhook_args')) {
-    Add-Content -Path $TempWpConfigPath -Value $hmacCode
-    Write-Host "  Added Gravity Flow webhook HMAC signing to wp-config.php" -ForegroundColor Green
-}
-
-# ─────────────────────────────────────────────
-# Step 4: Start Docker containers
-# ─────────────────────────────────────────────
-Write-Host ""
-Write-Host "[4/11] Starting Docker containers..." -ForegroundColor Yellow
+Write-Host "[3/13] Starting Docker containers..." -ForegroundColor Yellow
 
 Push-Location $ScriptDir
 try {
@@ -546,13 +341,13 @@ finally {
 }
 
 # ─────────────────────────────────────────────
-# Step 5: Copy WordPress files into Docker volume
+# Step 4: Copy WordPress files into Docker volume
 # ─────────────────────────────────────────────
 # PHP files are served from the named Docker volume (wp_data) which lives on the
 # Linux filesystem inside Docker - far faster than a Windows bind-mount.
 # Only wp-content/uploads remains as a bind-mount so media is accessible on the host.
 Write-Host ""
-Write-Host "[5/11] Copying WordPress files into Docker volume..." -ForegroundColor Yellow
+Write-Host "[4/13] Copying WordPress files into Docker volume..." -ForegroundColor Yellow
 
 # Check if the volume already has WP files (idempotent re-runs)
 $wpIndexCheck = docker compose exec -T wordpress test -f /var/www/html/wp-config.php 2>&1
@@ -587,14 +382,6 @@ else {
         }
     }
 
-    # Inject the patched wp-config.php (Backup/ version was read-only; temp file has all patches)
-    docker cp $TempWpConfigPath "${containerId}:/var/www/html/wp-config.php" 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "docker cp failed for wp-config.php"
-        exit 1
-    }
-    Write-Host "  Injected patched wp-config.php." -ForegroundColor Green
-
     # Remove production caching drop-ins that would break the local environment
     foreach ($dropin in @("wp-content/advanced-cache.php", "wp-content/object-cache.php")) {
         $dropinExists = docker compose exec -T wordpress test -f "/var/www/html/$dropin" 2>&1
@@ -619,10 +406,10 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 6: Wait for database to be ready
+# Step 5: Wait for database to be ready
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[6/11] Waiting for database import to complete..." -ForegroundColor Yellow
+Write-Host "[5/13] Waiting for database import to complete..." -ForegroundColor Yellow
 Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
 Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
 Write-Host ""
@@ -663,10 +450,125 @@ if (-not $ready) {
 }
 
 # ─────────────────────────────────────────────
+# Step 6: Patch wp-config.php
+# ─────────────────────────────────────────────
+Write-Host ""
+Write-Host "[6/13] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+
+$BackupWpConfigPath = Join-Path $BackupWpDir "wp-config.php"
+$TempWpConfigPath = Join-Path $env:TEMP "wp-config-docker-patched.php"
+
+if (-not (Test-Path $BackupWpConfigPath)) {
+    Write-Error "wp-config.php not found at: $BackupWpConfigPath"
+    exit 1
+}
+
+$config = Get-Content $BackupWpConfigPath -Raw
+$changes = @()
+
+# --- DB_HOST: -> db (Docker service name) ---
+$newConfig = $config -replace "define\s*\(\s*'DB_HOST'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_HOST', 'db'); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "DB_HOST -> db" }
+
+# --- DB_NAME ---
+$newConfig = $config -replace "define\s*\(\s*'DB_NAME'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_NAME', '$DbName'); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "DB_NAME -> $DbName" }
+
+# --- DB_USER ---
+$newConfig = $config -replace "define\s*\(\s*'DB_USER'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_USER', '$DbUser'); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "DB_USER -> $DbUser" }
+
+# --- DB_PASSWORD ---
+$newConfig = $config -replace "define\s*\(\s*'DB_PASSWORD'\s*,\s*'[^']*'\s*\)\s*;", "define('DB_PASSWORD', '$DbPassword'); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "DB_PASSWORD -> <set>" }
+
+# --- FORCE_SSL_ADMIN: false ---
+$newConfig = $config -replace "define\s*\(\s*'FORCE_SSL_ADMIN'\s*,\s*(true|false)\s*\)\s*;", "define('FORCE_SSL_ADMIN', false); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "FORCE_SSL_ADMIN -> false" }
+
+# --- WP_CACHE: false ---
+$newConfig = $config -replace "define\s*\(\s*'WP_CACHE'\s*,\s*(true|false)\s*\)\s*;", "define('WP_CACHE', false); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "WP_CACHE -> false" }
+
+# --- WP_REDIS_DISABLED: true ---
+$newConfig = $config -replace "define\s*\(\s*'WP_REDIS_DISABLED'\s*,\s*(true|false)\s*\)\s*;", "define('WP_REDIS_DISABLED', true); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "WP_REDIS_DISABLED -> true" }
+
+# --- DISALLOW_FILE_MODS: based on .env setting ---
+$newValue = $DisallowFileMods.ToString().ToLower()
+$newConfig = $config -replace "define\s*\(\s*'DISALLOW_FILE_MODS'\s*,\s*(true|false)\s*\)\s*;", "define('DISALLOW_FILE_MODS', $newValue);"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "DISALLOW_FILE_MODS -> $newValue" }
+
+# --- WP_DEBUG: true ---
+$newConfig = $config -replace "define\s*\(\s*'WP_DEBUG'\s*,\s*(true|false)\s*\)\s*;", "define('WP_DEBUG', true); // Patched for Docker: debug enabled"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "WP_DEBUG -> true" }
+
+# --- WP_DEBUG_LOG: true ---
+$newConfig = $config -replace "define\s*\(\s*'WP_DEBUG_LOG'\s*,\s*(true|false)\s*\)\s*;", "define('WP_DEBUG_LOG', true); // Patched for Docker: debug log enabled"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "WP_DEBUG_LOG -> true" }
+
+# --- WP_MEMORY_LIMIT: 2048M ---
+$newConfig = $config -replace "define\s*\(\s*'WP_MEMORY_LIMIT'\s*,\s*'[^']*'\s*\)\s*;", "define('WP_MEMORY_LIMIT', '2048M'); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "WP_MEMORY_LIMIT -> 2048M" }
+
+# --- WP_MAX_MEMORY_LIMIT: 2048M ---
+$newConfig = $config -replace "define\s*\(\s*'WP_MAX_MEMORY_LIMIT'\s*,\s*'[^']*'\s*\)\s*;", "define('WP_MAX_MEMORY_LIMIT', '2048M'); // Patched for Docker"
+if ($newConfig -ne $config) { $config = $newConfig; $changes += "WP_MAX_MEMORY_LIMIT -> 2048M" }
+
+# --- WT_VERIFY_API_URL: from .env (optional override) ---
+if ($WtVerifyApiUrl) {
+    $newConfig = $config -replace "define\s*\(\s*'WT_VERIFY_API_URL'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_VERIFY_API_URL', '$WtVerifyApiUrl'); // Patched for Docker"
+    if ($newConfig -ne $config) { $config = $newConfig; $changes += "WT_VERIFY_API_URL -> $WtVerifyApiUrl" }
+}
+
+# --- WT_VERIFY_API_KEY: from .env (optional override) ---
+if ($WtVerifyApiKey) {
+    $newConfig = $config -replace "define\s*\(\s*'WT_VERIFY_API_KEY'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_VERIFY_API_KEY', '$WtVerifyApiKey'); // Patched for local"
+    if ($newConfig -ne $config) { $config = $newConfig; $changes += "WT_VERIFY_API_KEY -> $WtVerifyApiKey" }
+}
+
+# --- GRAVITYFLOW_WEBHOOK_SECRET: set equal to WT_VERIFY_API_KEY ---
+if ($WtVerifyApiKey) {
+    $newConfig = $config -replace "define\s*\(\s*'GRAVITYFLOW_WEBHOOK_SECRET'\s*,\s*'[^']*'\s*\)\s*;", "define('GRAVITYFLOW_WEBHOOK_SECRET', '$WtVerifyApiKey'); // Patched for local"
+    if ($newConfig -ne $config) { $config = $newConfig; $changes += "GRAVITYFLOW_WEBHOOK_SECRET -> $WtVerifyApiKey" }
+}
+
+# --- WT_ATANGA_TOKEN: from .env (not in production config, so append if missing) ---
+if ($WtAtangaToken) {
+    $newConfig = $config -replace "define\s*\(\s*'WT_ATANGA_TOKEN'\s*,\s*'[^']*'\s*\)\s*;", "define('WT_ATANGA_TOKEN', '$WtAtangaToken'); // Patched for local"
+    if ($newConfig -ne $config) {
+        $config = $newConfig
+        $changes += "WT_ATANGA_TOKEN -> $WtAtangaToken"
+    } elseif (-not $config.Contains("'WT_ATANGA_TOKEN'")) {
+        $stopMarker = "/* That's all, stop editing!"
+        if ($config.Contains($stopMarker)) {
+            $config = $config.Replace($stopMarker, "define('WT_ATANGA_TOKEN', '$WtAtangaToken'); // Added for local`n$stopMarker")
+            $changes += "WT_ATANGA_TOKEN -> $WtAtangaToken (added)"
+        }
+    }
+}
+
+$TempWpConfigPath = Join-Path $env:TEMP "wp-config-docker-patched.php"
+Set-Content -Path $TempWpConfigPath -Value $config -NoNewline
+$containerId = docker compose ps -q wordpress
+docker cp $TempWpConfigPath "${containerId}:/var/www/html/wp-config.php" 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "docker cp failed for wp-config.php"
+    exit 1
+}
+
+foreach ($change in $changes) {
+    Write-Host "  $change" -ForegroundColor Green
+}
+if ($changes.Count -eq 0) {
+    Write-Host "  No changes needed (already patched?)" -ForegroundColor DarkYellow
+}
+
+# ─────────────────────────────────────────────
 # Step 7: Patch Requests.php timeouts
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[7/11] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
+Write-Host "[7/13] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
 
 $RequestsPhpPath = Join-Path $BackupWpDir "wp-includes\Requests\src\Requests.php"
 if (-not (Test-Path $RequestsPhpPath)) {
@@ -699,7 +601,12 @@ else {
     }
 }
 
-# Patch gravity-forms.php: fix verify API signature header name and add atanga header
+# ─────────────────────────────────────────────
+# Step 8: Patch gravity-forms.php webhook signatures
+# ─────────────────────────────────────────────
+Write-Host ""
+Write-Host "[8/13] Patching wp-content/themes/pro-child/includes/gravity-forms.php..." -ForegroundColor Yellow
+
 $GravityFormsPhpPath = Join-Path $BackupWpDir "wp-content\themes\pro-child\includes\gravity-forms.php"
 if (-not (Test-Path $GravityFormsPhpPath)) {
     Write-Host "  gravity-forms.php not found at: $GravityFormsPhpPath, skipping." -ForegroundColor DarkYellow
@@ -708,19 +615,25 @@ else {
     $gravityFormsContent = Get-Content $GravityFormsPhpPath -Raw
     $gfChanges = @()
 
-    # Fix signature header name
-    $newContent = $gravityFormsContent.Replace("'X-Signature' => 'sha256=' . `$signature_hex", "'X-Hub-Signature-256' => 'sha256=' . `$signature_hex")
+    # Fix signature header name and add X-atanga in verify API calls
+    $newContent = $gravityFormsContent.Replace("'X-Signature' => 'sha256=' . `$signature_hex", "'X-Hub-Signature-256' => 'sha256=' . `$signature_hex,`n            'X-atanga' => defined('WT_ATANGA_TOKEN') ? WT_ATANGA_TOKEN : ''")
     if ($newContent -ne $gravityFormsContent) {
         $gravityFormsContent = $newContent
-        $gfChanges += "Verify API header: X-Signature -> X-Hub-Signature-256"
+        $gfChanges += "Verify API header: X-Signature -> X-Hub-Signature-256, added X-atanga"
     }
 
-    # Add X-atanga header after X-Hub-Signature-256
-    $atangaHeader = "`n            'X-atanga' => defined('WT_ATANGA_TOKEN') ? WT_ATANGA_TOKEN : ''"
-    $newContent = $gravityFormsContent.Replace("'X-Hub-Signature-256' => 'sha256=' . `$signature_hex", "'X-Hub-Signature-256' => 'sha256=' . `$signature_hex," + $atangaHeader)
+    # Fix Gravity Flow webhook args hook (gravityflow_webhook_args)
+    $newContent = $gravityFormsContent.Replace("    `$args['headers']['X-Signature'] = `$signature;", "    `$args['headers']['X-Hub-Signature-256'] = `$signature;`n    `$args['headers']['X-atanga'] = defined( 'WT_ATANGA_TOKEN' ) ? WT_ATANGA_TOKEN : '';")
     if ($newContent -ne $gravityFormsContent) {
         $gravityFormsContent = $newContent
-        $gfChanges += "Verify API header: added X-atanga"
+        $gfChanges += "Gravity Flow webhook: X-Signature -> X-Hub-Signature-256, added X-atanga"
+    }
+
+    # Fix Gravity Forms Webhooks Add-On hook (gform_webhooks_request_args)
+    $newContent = $gravityFormsContent.Replace("    `$request_args['headers']['X-Signature'] = `$signature;", "    `$request_args['headers']['X-Hub-Signature-256'] = `$signature;`n    `$request_args['headers']['X-atanga'] = defined( 'WT_ATANGA_TOKEN' ) ? WT_ATANGA_TOKEN : '';")
+    if ($newContent -ne $gravityFormsContent) {
+        $gravityFormsContent = $newContent
+        $gfChanges += "GF Webhooks Add-On: X-Signature -> X-Hub-Signature-256, added X-atanga"
     }
 
     if ($gfChanges.Count -gt 0) {
@@ -738,10 +651,10 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 8: Install WP-CLI and replace URLs
+# Step 9: Install WP-CLI and replace URLs
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[8/11] Replacing production URLs with localhost..." -ForegroundColor Yellow
+Write-Host "[9/13] Replacing production URLs with localhost..." -ForegroundColor Yellow
 
 $productionUrl = "https://waikatotainui.com"
 $localUrl = if ($WpPort -eq "80") { "http://localhost" } else { "http://localhost:$WpPort" }
@@ -769,10 +682,10 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 9: Create local admin user
+# Step 10: Create local admin user
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[9/12] Creating local admin user '$LocalAdminUser'..." -ForegroundColor Yellow
+Write-Host "[10/13] Creating local admin user '$LocalAdminUser'..." -ForegroundColor Yellow
 
 $userExists = docker compose exec -T wordpress wp --allow-root user get $LocalAdminUser --field=login 2>&1
 if ($LASTEXITCODE -eq 0) {
@@ -795,10 +708,10 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 10: Disable Wordfence 2FA
+# Step 11: Disable Wordfence 2FA
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[10/12] Disabling Wordfence 2FA..." -ForegroundColor Yellow
+Write-Host "[11/13] Disabling Wordfence 2FA..." -ForegroundColor Yellow
 
 # Clear all 2FA secrets and remove the enforcement policy so no user is blocked by 2FA locally.
 $TempDisable2faPath = Join-Path $env:TEMP "disable-2fa.php"
@@ -839,11 +752,11 @@ else {
 }
 
 # ─────────────────────────────────────────────
-# Step 11: Disable Gravity Forms notifications
+# Step 12: Disable Gravity Forms notifications
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($DisableGfNotifications) {
-    Write-Host "[11/12] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+    Write-Host "[12/13] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
 
     # Use WP-CLI + PHP to properly handle notifications that lack an isActive field
     # (they default to active in GF but won't be caught by a simple string replace).
@@ -896,17 +809,17 @@ echo "Updated $updated form(s)\n";
     }
 }
 else {
-    Write-Host "[11/12] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
+    Write-Host "[12/13] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
-# Step 12: Redirect Make.com webhooks
+# Step 13: Redirect Make.com webhooks
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($GfWebhookRedirectHost) {
     if ($GfWebhookRedirectHostIds.Count -gt 0) {
         $idList = $GfWebhookRedirectHostIds -join ","
-        Write-Host "[12/12] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
+        Write-Host "[13/13] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
 
         # Redirect webhooks for specified form IDs
         $redirectSql = @"
@@ -952,7 +865,7 @@ WHERE form_id IN (
         }
     }
     else {
-        Write-Host "[12/12] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+        Write-Host "[13/13] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
 
         $webhookSql = @"
 UPDATE wp_gf_addon_feed
@@ -973,7 +886,7 @@ WHERE meta LIKE '%hook.us1.make.com%';
     }
 }
 else {
-    Write-Host "[12/12] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
+    Write-Host "[13/13] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────

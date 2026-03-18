@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Read(..)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(powershell -Command \".\\\\query.ps1*\")",
+      "Bash(Select-String:*)"
     ]
   }
 }
