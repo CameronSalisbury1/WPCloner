@@ -19,6 +19,7 @@
     11. Disables Wordfence 2FA
     12. Disables Gravity Forms notifications (optional)
     13. Redirects webhooks (optional)
+    14. Disables Gravity Forms scheduling for specified forms (optional)
 
     PHP files are served from a named Docker volume (native Linux filesystem speed).
     Only wp-content/uploads is bind-mounted from the Windows host so uploaded media
@@ -94,6 +95,11 @@ $DbPassword = $EnvVars["DB_PASSWORD"]
 $WpPort = $EnvVars["WORDPRESS_PORT"]
 $PmaPort = $EnvVars["PHPMYADMIN_PORT"]
 $DisableGfNotifications = $EnvVars["DISABLE_GF_NOTIFICATIONS"] -eq "true"
+$GfDisableScheduleFormIds = if ($EnvVars["GF_DISABLE_SCHEDULE_FORM_IDS"]) {
+    @($EnvVars["GF_DISABLE_SCHEDULE_FORM_IDS"] -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+} else {
+    @()
+}
 $GfWebhookRedirectHost = $EnvVars["GF_WEBHOOK_REDIRECT_HOST"]
 $GfWebhookRedirectHostIds = if ($EnvVars["GF_WEBHOOK_REDIRECT_HOST_IDS"]) {
     @($EnvVars["GF_WEBHOOK_REDIRECT_HOST_IDS"] -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -125,7 +131,7 @@ Write-Host ""
 # Step 0: Force mode - wipe existing setup
 # ─────────────────────────────────────────────
 if ($Force) {
-    Write-Host "[0/13] Force mode: Wiping existing setup..." -ForegroundColor Red
+    Write-Host "[0/14] Force mode: Wiping existing setup..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -160,7 +166,7 @@ if ($Force) {
     Write-Host ""
 }
 elseif ($ForceDb) {
-    Write-Host "[0/13] ForceDb: Wiping database for fresh import..." -ForegroundColor Red
+    Write-Host "[0/14] ForceDb: Wiping database for fresh import..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -195,7 +201,7 @@ elseif ($ForceDb) {
     Write-Host ""
 }
 elseif ($ForceFiles) {
-    Write-Host "[0/13] ForceFiles: Wiping WordPress files for fresh copy..." -ForegroundColor Red
+    Write-Host "[0/14] ForceFiles: Wiping WordPress files for fresh copy..." -ForegroundColor Red
 
     Push-Location $ScriptDir
     try {
@@ -223,7 +229,7 @@ elseif ($ForceFiles) {
 # ─────────────────────────────────────────────
 # Step 1: Pre-flight checks
 # ─────────────────────────────────────────────
-Write-Host "[1/13] Pre-flight checks..." -ForegroundColor Yellow
+Write-Host "[1/14] Pre-flight checks..." -ForegroundColor Yellow
 
 # Check Docker
 try {
@@ -259,7 +265,7 @@ Write-Host "  Backup/database/database: OK ($([math]::Round($dbFileSize, 0)) MB)
 # Step 2: Copy uploads and prepare database
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[2/13] Copying uploads and preparing database..." -ForegroundColor Yellow
+Write-Host "[2/14] Copying uploads and preparing database..." -ForegroundColor Yellow
 
 $UploadsDir = Join-Path $WorkingDir "uploads"
 $WorkingDbDir = Join-Path $WorkingDir "database"
@@ -325,7 +331,7 @@ else {
 # Step 3: Start Docker containers
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/13] Starting Docker containers..." -ForegroundColor Yellow
+Write-Host "[3/14] Starting Docker containers..." -ForegroundColor Yellow
 
 Push-Location $ScriptDir
 try {
@@ -347,7 +353,7 @@ finally {
 # Linux filesystem inside Docker - far faster than a Windows bind-mount.
 # Only wp-content/uploads remains as a bind-mount so media is accessible on the host.
 Write-Host ""
-Write-Host "[4/13] Copying WordPress files into Docker volume..." -ForegroundColor Yellow
+Write-Host "[4/14] Copying WordPress files into Docker volume..." -ForegroundColor Yellow
 
 # Check if the volume already has WP files (idempotent re-runs)
 $wpIndexCheck = docker compose exec -T wordpress test -f /var/www/html/wp-config.php 2>&1
@@ -409,7 +415,7 @@ else {
 # Step 5: Wait for database to be ready
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[5/13] Waiting for database import to complete..." -ForegroundColor Yellow
+Write-Host "[5/14] Waiting for database import to complete..." -ForegroundColor Yellow
 Write-Host "  The $([math]::Round($dbFileSize, 0)) MB SQL dump may take several minutes to import." -ForegroundColor DarkGray
 Write-Host "  You can monitor progress with: docker compose logs -f db" -ForegroundColor DarkGray
 Write-Host ""
@@ -453,7 +459,7 @@ if (-not $ready) {
 # Step 6: Patch wp-config.php
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[6/13] Patching wp-config.php for local environment..." -ForegroundColor Yellow
+Write-Host "[6/14] Patching wp-config.php for local environment..." -ForegroundColor Yellow
 
 $BackupWpConfigPath = Join-Path $BackupWpDir "wp-config.php"
 $TempWpConfigPath = Join-Path $env:TEMP "wp-config-docker-patched.php"
@@ -568,7 +574,7 @@ if ($changes.Count -eq 0) {
 # Step 7: Patch Requests.php timeouts
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[7/13] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
+Write-Host "[7/14] Patching wp-includes/Requests/src/Requests.php timeouts to 120s..." -ForegroundColor Yellow
 
 $RequestsPhpPath = Join-Path $BackupWpDir "wp-includes\Requests\src\Requests.php"
 if (-not (Test-Path $RequestsPhpPath)) {
@@ -605,7 +611,7 @@ else {
 # Step 8: Patch gravity-forms.php webhook signatures
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[8/13] Patching wp-content/themes/pro-child/includes/gravity-forms.php..." -ForegroundColor Yellow
+Write-Host "[8/14] Patching wp-content/themes/pro-child/includes/gravity-forms.php..." -ForegroundColor Yellow
 
 $GravityFormsPhpPath = Join-Path $BackupWpDir "wp-content\themes\pro-child\includes\gravity-forms.php"
 if (-not (Test-Path $GravityFormsPhpPath)) {
@@ -654,7 +660,7 @@ else {
 # Step 9: Install WP-CLI and replace URLs
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[9/13] Replacing production URLs with localhost..." -ForegroundColor Yellow
+Write-Host "[9/14] Replacing production URLs with localhost..." -ForegroundColor Yellow
 
 $productionUrl = "https://waikatotainui.com"
 $localUrl = if ($WpPort -eq "80") { "http://localhost" } else { "http://localhost:$WpPort" }
@@ -666,8 +672,7 @@ if ! command -v wp &> /dev/null; then
     chmod +x wp-cli.phar
     mv wp-cli.phar /usr/local/bin/wp
 fi
-wp --allow-root search-replace '$productionUrl' '$localUrl' --all-tables --report-changed-only \
-  --skip-tables=wp_gf_entry,wp_gf_entry_meta,wp_gravitysmtp_events,wp_redirection_404,wp_redirection_logs,wp_stream_meta,wp_wfhits,wp_wfnotifications,wp_wpr_above_the_fold,wp_wpr_lazy_render_content,wp_wpr_rocket_cache,wp_wsal_metadata,wp_wsal_occurrences
+wp --allow-root search-replace '$productionUrl' '$localUrl' --all-tables --report-changed-only
 "@
 
 docker compose exec -T wordpress bash -c $wpCliScript 2>&1 | ForEach-Object {
@@ -685,7 +690,7 @@ else {
 # Step 10: Create local admin user
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[10/13] Creating local admin user '$LocalAdminUser'..." -ForegroundColor Yellow
+Write-Host "[10/14] Creating local admin user '$LocalAdminUser'..." -ForegroundColor Yellow
 
 $userExists = docker compose exec -T wordpress wp --allow-root user get $LocalAdminUser --field=login 2>&1
 if ($LASTEXITCODE -eq 0) {
@@ -711,7 +716,7 @@ else {
 # Step 11: Disable Wordfence 2FA
 # ─────────────────────────────────────────────
 Write-Host ""
-Write-Host "[11/13] Disabling Wordfence 2FA..." -ForegroundColor Yellow
+Write-Host "[11/14] Disabling Wordfence 2FA..." -ForegroundColor Yellow
 
 # Clear all 2FA secrets and remove the enforcement policy so no user is blocked by 2FA locally.
 $TempDisable2faPath = Join-Path $env:TEMP "disable-2fa.php"
@@ -756,7 +761,7 @@ else {
 # ─────────────────────────────────────────────
 Write-Host ""
 if ($DisableGfNotifications) {
-    Write-Host "[12/13] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
+    Write-Host "[12/14] Disabling Gravity Forms notifications..." -ForegroundColor Yellow
 
     # Use WP-CLI + PHP to properly handle notifications that lack an isActive field
     # (they default to active in GF but won't be caught by a simple string replace).
@@ -809,7 +814,7 @@ echo "Updated $updated form(s)\n";
     }
 }
 else {
-    Write-Host "[12/13] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
+    Write-Host "[12/14] Skipping Gravity Forms notifications (DISABLE_GF_NOTIFICATIONS=false)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
@@ -823,7 +828,7 @@ if ($GfWebhookRedirectHost) {
 
     if ($GfWebhookRedirectHostIds.Count -gt 0) {
         $idList = $GfWebhookRedirectHostIds -join ","
-        Write-Host "[13/13] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
+        Write-Host "[13/14] Redirecting Make.com webhooks (form IDs: $idList -> $GfWebhookRedirectHost; others -> disabled)..." -ForegroundColor Yellow
 
         # Redirect webhooks for specified form IDs
         $redirectSql = @"
@@ -869,7 +874,7 @@ WHERE form_id IN (
         }
     }
     else {
-        Write-Host "[13/13] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
+        Write-Host "[13/14] Redirecting Make.com webhooks to $GfWebhookRedirectHost..." -ForegroundColor Yellow
 
         $webhookSql = @"
 UPDATE wp_gf_addon_feed
@@ -890,7 +895,37 @@ WHERE meta LIKE '%hook.us1.make.com%';
     }
 }
 else {
-    Write-Host "[13/13] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
+    Write-Host "[13/14] Skipping webhook redirect (GF_WEBHOOK_REDIRECT_HOST not set)" -ForegroundColor DarkYellow
+}
+
+# ─────────────────────────────────────────────
+# Step 14: Disable Gravity Forms scheduling for specified forms
+# ─────────────────────────────────────────────
+Write-Host ""
+if ($GfDisableScheduleFormIds.Count -gt 0) {
+    $idList = $GfDisableScheduleFormIds -join ","
+    Write-Host "[14/14] Disabling Gravity Forms scheduling for form IDs: $idList..." -ForegroundColor Yellow
+
+    $disableScheduleSql = @"
+UPDATE wp_gf_form_meta
+SET display_meta = JSON_SET(display_meta, '$.scheduleForm', CAST('false' AS JSON))
+WHERE form_id IN ($idList)
+AND JSON_EXTRACT(display_meta, '$.scheduleForm') = true;
+"@
+
+    docker compose exec -T db mysql -u"$DbUser" -p"$DbPassword" "$DbName" -e $disableScheduleSql 2>&1 | ForEach-Object {
+        if ($_ -notmatch "Warning.*password") { Write-Host "  $_" -ForegroundColor DarkGray }
+    }
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  Form scheduling disabled for IDs: $idList" -ForegroundColor Green
+    }
+    else {
+        Write-Host "  WARNING: Failed to disable form scheduling." -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host "[14/14] Skipping form schedule override (GF_DISABLE_SCHEDULE_FORM_IDS not set)" -ForegroundColor DarkYellow
 }
 
 # ─────────────────────────────────────────────
